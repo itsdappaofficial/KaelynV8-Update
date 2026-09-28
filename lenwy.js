@@ -1482,7 +1482,7 @@ lenwy.relayMessage(jid, gen, {
 }   
 
 async function ttslide(text) {
-    let response = await axios.get(`https://dlpanda.com/id?url=${text}&token=${process.env.DLPANDA_TOKEN || ""}`)
+    let response = await axios.get(`https://dlpanda.com/id?url=${text}&token=G7eRpMaa`)
     const html = response.data
     const $ = cheerio.load(html)
     let asd = []
@@ -1613,7 +1613,7 @@ async function ttslide(text) {
 }   
 
 async function cai(query) {
-        let token = process.env.CAI_TOKEN || "";
+        let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IkVqYmxXUlVCWERJX0dDOTJCa2N1YyJ9.eyJnaXZlbl9uYW1lIjoiUkNTIiwiZmFtaWx5X25hbWUiOiJYWiIsIm5pY2tuYW1lIjoicmNzeHo2NDkiLCJuYW1lIjoiUkNTIFhaIiwicGljdHVyZSI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0lYbGpRdW11SWlQTjdwLUoxUk1HNjZ0ODZzTzJhMG9DcW93RTlZVDFzaj1zOTYtYyIsImxvY2FsZSI6ImlkIiwidXBkYXRlZF9hdCI6IjIwMjMtMTEtMDVUMTQ6NTM6NDkuNjM0WiIsImVtYWlsIjoicmNzeHo2NDlAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImlzcyI6Imh0dHBzOi8vY2hhcmFjdGVyLWFpLnVzLmF1dGgwLmNvbS8iLCJhdWQiOiJkeUQzZ0UyODFNcWdJU0c3RnVJWFloTDJXRWtucVp6diIsImlhdCI6MTY5OTE5NjAzNCwiZXhwIjoxNzAyNzk2MDM0LCJzdWIiOiJnb29nbGUtb2F1dGgyfDExMDY5MjA2MTkzMTI0MTU4NTgwNSIsInNpZCI6IjVhaklfSlRJeFBZWGpzU0piWmdzRnQ4MXhaTHRhRERyIiwibm9uY2UiOiJUQzE0V2xvMVNGSmlkVU5FWVVSbFJXb3dTV3RJU25acVRtVTRVR3hoUldReU0xQm5Rbk0yYjAwNWJ3PT0ifQ.jduu283Aycw7GwUL270EkwoF71bINRrLnFzVJGpoG9uOO4A-jxtZ07XRZIr_t4lT_gt2N19BWXg7SGxRR_coFbCJLfyUHLzxx6ZaDGMqUnCPhJ6WXBHABsTsqnlQIJs1sQPJyLKw01-FU5FoB8atW3OIyjt0nJayJtMSm4NzKkGR2gBWZSNR3FIqX7r4NY_wUSc-1Za50FaMiLg3XdGkfE59wxs_NdlxxdPVVG4G4uKBWQCIy6ofRDnnb22Wfw1knt8yXMjGfq8RtSsAkGMmjp_KVICSRDCqy0cCOtUdmih5LCRyEQagIRBl90SP753C7ehiue_ucidCYh9XrxP7HQ";
     return new Promise(async (resolve, reject) => {
     try {
         LenwyLD()
@@ -2812,7 +2812,106 @@ setInterval(async () => {
 
 //----------------------------------------------------------------------- [ GAME TEBAKANGKA ] ------------------------------------------------------------------------
 
+// ===================== GITHUB AUTO UPDATE (LENWY.JS ONLY) =====================
+const KAELYN_UPDATE = {
+  currentVersion: '8.1.0',
+  versionUrl: 'https://raw.githubusercontent.com/itsdappaofficial/KaelynV8-Update/main/version.json',
+  fileUrl: 'https://raw.githubusercontent.com/itsdappaofficial/KaelynV8-Update/main/lenwy.js',
+  targetFile: path.join(__dirname, 'lenwy.js'),
+  backupFile: path.join(__dirname, 'lenwy.js.bak')
+}
+
+async function getKaelynUpdateInfo() {
+  const response = await axios.get(KAELYN_UPDATE.versionUrl, {
+    timeout: 15000,
+    headers: { 'User-Agent': 'KaelynV8-Updater' }
+  })
+  if (!response.data || !response.data.version) {
+    throw new Error('version.json tidak valid')
+  }
+  return response.data
+}
+
+function compareVersion(a, b) {
+  const pa = String(a).replace(/^v/i, '').split('.').map(Number)
+  const pb = String(b).replace(/^v/i, '').split('.').map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0
+    const y = pb[i] || 0
+    if (x > y) return 1
+    if (x < y) return -1
+  }
+  return 0
+}
+
+async function cekUpdateKaelyn() {
+  const info = await getKaelynUpdateInfo()
+  return {
+    ...info,
+    available: compareVersion(info.version, KAELYN_UPDATE.currentVersion) > 0
+  }
+}
+
+async function updateLenwyFromGitHub() {
+  const info = await getKaelynUpdateInfo()
+  if (compareVersion(info.version, KAELYN_UPDATE.currentVersion) <= 0) {
+    return { updated: false, info }
+  }
+
+  const response = await axios.get(KAELYN_UPDATE.fileUrl, {
+    timeout: 30000,
+    responseType: 'text',
+    transformResponse: [(data) => data],
+    headers: { 'User-Agent': 'KaelynV8-Updater' }
+  })
+
+  const newCode = String(response.data || '')
+  if (!newCode.includes('switch (command)') || !newCode.includes('const KAELYN_UPDATE')) {
+    throw new Error('File update tidak valid (lenwy.js)')
+  }
+
+  // Backup hanya file lenwy.js. Database/session/file lain tidak disentuh.
+  fs.copyFileSync(KAELYN_UPDATE.targetFile, KAELYN_UPDATE.backupFile)
+  fs.writeFileSync(KAELYN_UPDATE.targetFile, newCode, 'utf8')
+
+  return { updated: true, info }
+}
+// =================== END GITHUB AUTO UPDATE (LENWY.JS ONLY) ===================
+
 switch (command) {
+
+    case 'cekupdate': {
+      if (!isCreator) return m.reply(mess.owner)
+      try {
+        const info = await cekUpdateKaelyn()
+        if (!info.available) {
+          return m.reply(`✅ *Kaelyn V8 sudah versi terbaru*\n\n📦 Versi sekarang: *V${KAELYN_UPDATE.currentVersion}*\n📝 ${info.update || 'Tidak ada catatan update.'}`)
+        }
+        return m.reply(`🆕 *UPDATE TERSEDIA*\n\n📦 Versi sekarang: *V${KAELYN_UPDATE.currentVersion}*\n🚀 Versi terbaru: *V${info.version}*\n📝 ${info.update || 'Ada pembaruan terbaru.'}\n\nKetik *${prefix}update* untuk memperbarui lenwy.js.`)
+      } catch (err) {
+        console.error('[CEK UPDATE]', err)
+        return m.reply(`❌ Gagal mengecek update.\n
+${err.message}`)
+      }
+    }
+
+    case 'update': {
+      if (!isCreator) return m.reply(mess.owner)
+      try {
+        await m.reply('🔄 *Mengecek update Kaelyn V8...*')
+        const result = await updateLenwyFromGitHub()
+        if (!result.updated) {
+          return m.reply(`✅ *Tidak ada update.*\n\n📦 Versi saat ini: *V${KAELYN_UPDATE.currentVersion}*`)
+        }
+
+        await m.reply(`✅ *UPDATE BERHASIL*\n\n📦 Versi baru: *V${result.info.version}*\n📝 ${result.info.update || 'Update lenwy.js selesai.'}\n\n🔄 Bot akan restart sekarang...`)
+        setTimeout(() => process.exit(0), 1500)
+      } catch (err) {
+        console.error('[UPDATE LENWY]', err)
+        return m.reply(`❌ *Update gagal.*\n\n${err.message}\n\nFile lain dan database tidak diubah.`)
+      }
+      break
+    }
 
     case 'deposit':
     case 'depositqris':
@@ -2958,7 +3057,7 @@ switch (command) {
 
     case 'randomanime': {
                
-        let url = `https://api.autoresbot.com/api/random/anime?apikey=${process.env.AUTORESBOT_API_KEY || ""}`;
+        let url = `https://api.autoresbot.com/api/random/anime?apikey=85f96e33aca5b3b69bc062e4`;
         await lenwy.sendMessage(m.chat, { image: { url } }, { quoted: m });
         break;
     }
@@ -3910,7 +4009,7 @@ case 'song': {
 
  const axios = require('axios');
  const yts = require('yt-search');
- const apiKey = process.env.AUTORESBOT_API_KEY || ''
+ const apiKey = '99261jap81937jdo820hao'
  let videoUrl = text;
  let videoData = null;
 
@@ -4516,7 +4615,7 @@ async function editImage(imageBuffer, prompt) {
     {
       headers: {
         ...form.getHeaders(),
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY || ""}`
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
       }
     }
   )
@@ -5443,7 +5542,7 @@ break
 m.reply('sabar ya kak, lagi di check')
  const userId = args[0];
  const zoneId = args[1];
- const url = `https://deoberon-api.vercel.app/stalk/mlbb-first?apikey=${process.env.DEROBERON_API_KEY || ""}&userId=${userId}&zoneId=${zoneId}`;
+ const url = `https://deoberon-api.vercel.app/stalk/mlbb-first?apikey=haqiayonima&userId=${userId}&zoneId=${zoneId}`;
 
  fetch(url)
  .then(response => {
@@ -5589,7 +5688,7 @@ break
 m.reply('sabar ya kak, lagi di check');
  const userId = args[0];
  const zoneId = args[1];
- const url = `https://deoberon-api.vercel.app/stalk/mlbb-first?apikey=${process.env.DEROBERON_API_KEY || ""}&userId=${userId}&zoneId=${zoneId}`;
+ const url = `https://deoberon-api.vercel.app/stalk/mlbb-first?apikey=haqiayonima&userId=${userId}&zoneId=${zoneId}`;
 
  fetch(url)
  .then(response => {
@@ -5952,7 +6051,7 @@ break
  let media = await lenwy.downloadAndSaveMediaMessage(quoted)
  let anu = await uploader60Minute(media)
  let result = (util.format(anu))
- const proses = await (await fetch(`https://api.maelyn.sbs/api/img2img/upscale?url=${result}&apikey=${process.env.MAELYN_API_KEY || ""}`)).json()
+ const proses = await (await fetch(`https://api.maelyn.sbs/api/img2img/upscale?url=${result}&apikey=wyq3Zrsd53`)).json()
  console.log(proses)
  await lenwy.sendMessage(m.chat, { image: { url: proses.result.url }, caption: 'donee yaaa' }, { quoted: m })
  } catch (e) {
@@ -6432,7 +6531,7 @@ case 'idml2': {
         
         
 case 'idml': {
-  const apiKey = process.env.IDML_API_KEY || ''      
+  const apiKey = 'hBaomgIqJnvgjrRM2rST'      
   const args = text.split(" ");  
   const userId = args[0]; // User ID
   const zoneId = args[1]; // Zone ID
@@ -7001,7 +7100,7 @@ lenwy.sendMessage(from, {react:{text: "🔎", key:m.key}})
       
 
  try {
- const response = await fetch(`https://deoberon-api.vercel.app/stalk/supersus?apikey=${process.env.DEROBERON_API_KEY || ""}&id=${encodeURIComponent(q)}`);
+ const response = await fetch(`https://deoberon-api.vercel.app/stalk/supersus?apikey=haqiayonima&id=${encodeURIComponent(q)}`);
 
  if (!response.ok) {
  return m.reply(`Gagal mengambil data. Kode status: ${response.status}`);
@@ -7237,7 +7336,7 @@ let args = q.split("|")
 let args1 = args[0]
 let args2 = args[1]
 if (!q.includes('|')) return m.reply(`Contoh\n> ${prefix+command} Hai Teman|en\n\nKetik ${prefix}kodebahasa Untuk Melihat Kode Bahasa Lainnya`)
-let hasil = await (await fetch(`https://skizo.tech/api/translate?apikey=${process.env.SKIZO_API_KEY || ""}&text=${args1}&lang=${args2}`)).json()
+let hasil = await (await fetch(`https://skizo.tech/api/translate?apikey=13579&text=${args1}&lang=${args2}`)).json()
 let resu = `"${hasil.text}"\n\nTranslate Ke ${args2}\n\nHasil : \n*${hasil.result}*`
 lenwy.sendMessage(m.chat, {text: resu}, {quoted: m})
 }
@@ -9374,7 +9473,7 @@ break
     let media = await lenwy.downloadAndSaveMediaMessage(quoted)
     let anu = await shannzCdn(media)
     let result = (util.format(anu))
-    const proses = await (await fetch(`https://virtual-dimension.xyz/api/creator/upscale?url=${result}&api_key=${process.env.VIRTUAL_DIMENSION_API_KEY || ""}`)).json()
+    const proses = await (await fetch(`https://virtual-dimension.xyz/api/creator/upscale?url=${result}&api_key=031020`)).json()
     let imge = proses.data;
     await lenwy.sendMessage(m.chat, { image: { url: imge }, caption: 'SUCCESS ✅' }, { quoted: m })
   } catch (e) {
@@ -10851,7 +10950,7 @@ if (!text) return m.reply(`*Masukan Judul Filmnya*`)
 LenwyLD()
 await sleep(3000)
 if (text.length > 20) return m.reply(`*Maksimal 20 Karakter*`)
-            let fids = await axios.get(`http://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY || ""}&t=${text}&plot=full`)
+            let fids = await axios.get(`http://www.omdbapi.com/?apikey=742b2d09&t=${text}&plot=full`)
             let Lenwy_txt = ""
             console.log(fids.data)
 Lenwy_txt += "*IMDB Search*\n"
@@ -10891,7 +10990,7 @@ break
 case 'kisahnabi': {
 if (!text) return m.reply(`*Tolong Masukkan Nama Nabi*`) 
 try{
-let ilenwy = await fetchJson(`https://api.zeeoneofc.my.id/api/islam/kisahnabi?apikey=${process.env.ZEEONE_API_KEY || ""}&nabi=${text}`)
+let ilenwy = await fetchJson(`https://api.zeeoneofc.my.id/api/islam/kisahnabi?apikey=QIO8xicLNkEV43Y&nabi=${text}`)
 const namanabi = ilenwy.result.name
 const kelahiran = ilenwy.result.birth
 const wafat = ilenwy.result.death_age
@@ -11231,7 +11330,7 @@ await lenwy.sendMessage(m.chat, { react: { text: "✅️",key: m.key,}
 if (!text) return m.reply('Masukan Gambarannya\nContoh:\nAnime cowok memakai baju hitam sedang coding bertuliskan ${botname}')
 m.reply('*Proses ini membutuhkan waktu beberapa saat silahkan tunggu*')
 try {
-let img = await fetchJson(`http://15.235.142.199/api/ai/bingAi?prompt=${text}&apikey=${process.env.BINGAI_API_KEY || ""}`)
+let img = await fetchJson(`http://15.235.142.199/api/ai/bingAi?prompt=${text}&apikey=DdUFIJY3sIGZW0g`)
 let imgs = img.image
 let c = 0
 for (let ims of img.image) {
