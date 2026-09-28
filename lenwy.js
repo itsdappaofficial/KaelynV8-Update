@@ -368,14 +368,11 @@ const bot = [botNumber, ...global.bot]
 const isCreator = [botNumber, ...author].map(v => v.replace(/[^0-9]/g, '') + '@s.whatsapp.net').includes(m.sender)
 const isBot = bot.map(v => v.replace(/[^0-9]/g, '') + '@s.whatsapp.net').includes(m.sender)
 
-// Akses bot: ACCALL mengunci seluruh bot untuk owner saja.
-// Jika ACCALL mati, mode ACC biasa berlaku: member hanya bisa memakai bot di grup yang sudah di-ACC.
+// Akses bot:
+// - ACCALL aktif  -> semua grup diizinkan memakai bot.
+// - ACCALL mati   -> member hanya bisa memakai bot di grup yang sudah di-ACC.
 const isAccessCommand = ['acc', 'unacc', 'accall', 'unaccall'].includes(command)
 const isGroupAcc = m.isGroup ? accGroups.includes(m.chat) : false
-
-if (accAll && !isCreator && !isAccessCommand) {
-    return m.reply(`🔒 *BOT SEDANG ACCALL*\n\nSaat ini bot hanya dapat digunakan oleh *owner*.\nSilakan hubungi owner bot jika membutuhkan akses.`)
-}
 
 if (!accAll && m.isGroup && !isCreator && !isGroupAcc && !isAccessCommand) {
     return m.reply(`⛔ *GRUP BELUM DI-ACC*\n\nBot belum diaktifkan untuk grup ini.\nSilakan hubungi owner untuk melakukan *${prefix}acc* pada grup ini.`)
@@ -2954,12 +2951,12 @@ switch (command) {
 
         accAll = loadAccAll()
         if (accAll) {
-            return m.reply(`ℹ️ *ACCALL SUDAH AKTIF*\n\nSemua pengguna selain owner sudah tidak dapat menggunakan bot.`)
+            return m.reply(`ℹ️ *ACCALL SUDAH AKTIF*\n\nBot sudah bisa digunakan di *semua grup*.`)
         }
 
         accAll = true
         saveAccAll(true)
-        return m.reply(`🔒 *ACCALL AKTIF*\n\nSekarang *semua grup dan chat* dikunci.\n👑 Hanya *owner* yang dapat menggunakan bot.\n\nUntuk mengembalikan akses sesuai ACC grup, gunakan *${prefix}unaccall*.`)
+        return m.reply(`✅ *ACCALL AKTIF*\n\nBot sekarang bisa digunakan di *semua grup*.\n👥 Member di semua grup dapat menggunakan bot tanpa perlu *.acc* satu per satu.\n\nUntuk kembali ke sistem ACC per grup, gunakan *${prefix}unaccall*.`)
     }
 
     case 'unaccall': {
@@ -2967,7 +2964,7 @@ switch (command) {
 
         accAll = loadAccAll()
         if (!accAll) {
-            return m.reply(`ℹ️ *ACCALL SUDAH NONAKTIF*\n\nBot masih menggunakan sistem ACC grup biasa.`)
+            return m.reply(`ℹ️ *ACCALL SUDAH NONAKTIF*\n\nBot masih menggunakan sistem *ACC per grup*.`)
         }
 
         accAll = false
