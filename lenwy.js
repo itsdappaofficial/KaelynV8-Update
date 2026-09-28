@@ -5904,26 +5904,112 @@ break
 break
  
  case 'brat': {
-    lenwy.sendMessage(from, { react: { text: '🖼️', key: m.key } })
+    const fs = require("fs");
+    const axios = require("axios");
+    const FormData = require("form-data");
+    const path = require("path");
+
+    lenwy.sendMessage(from, {
+        react: {
+            text: '🖼️',
+            key: m.key
+        }
+    });
 
     if (!q) {
-        return m.reply(`Contoh penggunaan:\n\n.brat Dappa Official`)
+        return m.reply(`Contoh penggunaan:\n\n.brat Dappa Official`);
     }
+
+    let bratPath;
+    let hdPath;
 
     try {
-        const api = `https://dappaofficial-restapi.my.id/imagecreator/brat?apikey=${global.API_key}&text=${encodeURIComponent(q)}`
+        m.reply("⏳ Sedang membuat sticker BRAT HD...");
 
-        await lenwy.sendImageAsSticker(from, api, m, {
-            packname: 'Dappa Official',
-            author: 'By Developer Dappa'
-        })
+        // =========================
+        // 1. BUAT GAMBAR BRAT
+        // =========================
+        const bratApi = `https://dappaofficial-restapi.my.id/imagecreator/brat?apikey=${global.API_key}&text=${encodeURIComponent(q)}`;
+
+        const bratResponse = await axios.get(bratApi, {
+            responseType: 'arraybuffer',
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
+        });
+
+        bratPath = path.join(
+            process.cwd(),
+            `brat-${Date.now()}.png`
+        );
+
+        fs.writeFileSync(bratPath, bratResponse.data);
+
+        // =========================
+        // 2. UPLOAD KE API HD
+        // =========================
+        const form = new FormData();
+
+        form.append("apikey", global.API_key);
+        form.append("media", fs.createReadStream(bratPath));
+
+        const { data } = await axios.post(
+            "https://dappaofficial-restapi.my.id/imagecreator/upscale",
+            form,
+            {
+                headers: form.getHeaders(),
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity
+            }
+        );
+
+        console.log("RESPON UPSCALE:", data);
+
+        if (!data.status || !data.result) {
+            throw new Error(
+                data.error || "Gagal mengubah gambar BRAT ke HD."
+            );
+        }
+
+        // =========================
+        // 3. KIRIM HASIL HD JADI STICKER
+        // =========================
+        await lenwy.sendImageAsSticker(
+            from,
+            data.result,
+            m,
+            {
+                packname: 'Dappa Official',
+                author: 'By Developer Dappa'
+            }
+        );
 
     } catch (err) {
-        console.log(err)
-        m.reply('❌ Terjadi kesalahan saat membuat sticker brat.')
+        console.error(
+            "ERROR BRAT HD:",
+            err.response?.data || err
+        );
+
+        m.reply(
+            `❌ ${
+                err.response?.data?.error ||
+                err.message ||
+                "Terjadi kesalahan saat membuat sticker BRAT HD."
+            }`
+        );
+
+    } finally {
+        // Hapus file BRAT sementara
+        if (bratPath && fs.existsSync(bratPath)) {
+            fs.unlinkSync(bratPath);
+        }
+
+        // Hapus file HD kalau nanti digunakan
+        if (hdPath && fs.existsSync(hdPath)) {
+            fs.unlinkSync(hdPath);
+        }
     }
 }
-break
+break;
 
  case 'fakedanav2': {
     if (!text) return m.reply('Masukkan nominal!');
