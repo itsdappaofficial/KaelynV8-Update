@@ -206,6 +206,43 @@ const chatbot = JSON.parse(fs.readFileSync("./lib/chatbot.json"))
 const antidel = JSON.parse(fs.readFileSync("./lib/antidel.json"))
 const banned = JSON.parse(fs.readFileSync('./data/db/banned.json'))
 const imagenya = JSON.parse(fs.readFileSync('./database/Lenwytesti.json'))
+
+// Database whitelist grup yang di-ACC owner
+const accGroupFilePath = path.join(__dirname, './database/accGroup.json')
+function loadAccGroups() {
+    try {
+        const data = JSON.parse(fs.readFileSync(accGroupFilePath, 'utf8'))
+        return Array.isArray(data) ? data : []
+    } catch (e) {
+        try {
+            fs.writeFileSync(accGroupFilePath, '[]', 'utf8')
+        } catch {}
+        return []
+    }
+}
+function saveAccGroups(groups) {
+    fs.writeFileSync(accGroupFilePath, JSON.stringify([...new Set(groups)], null, 2), 'utf8')
+}
+let accGroups = loadAccGroups()
+
+// Mode ACCALL: jika aktif, hanya owner yang boleh menggunakan bot di mana pun.
+const accAllFilePath = path.join(__dirname, './database/accAll.json')
+function loadAccAll() {
+    try {
+        const data = JSON.parse(fs.readFileSync(accAllFilePath, 'utf8'))
+        return data === true || data?.enabled === true
+    } catch (e) {
+        try {
+            fs.writeFileSync(accAllFilePath, JSON.stringify({ enabled: false }, null, 2), 'utf8')
+        } catch {}
+        return false
+    }
+}
+function saveAccAll(enabled) {
+    fs.writeFileSync(accAllFilePath, JSON.stringify({ enabled: !!enabled }, null, 2), 'utf8')
+}
+let accAll = loadAccAll()
+
 const dbgcFilePath = path.join(__dirname, './database/databaseGroup.json')
 global.datagc
 try {
@@ -330,6 +367,19 @@ const botNumber = await lenwy.decodeJid(lenwy.user.id)
 const bot = [botNumber, ...global.bot]
 const isCreator = [botNumber, ...author].map(v => v.replace(/[^0-9]/g, '') + '@s.whatsapp.net').includes(m.sender)
 const isBot = bot.map(v => v.replace(/[^0-9]/g, '') + '@s.whatsapp.net').includes(m.sender)
+
+// Akses bot: ACCALL mengunci seluruh bot untuk owner saja.
+// Jika ACCALL mati, mode ACC biasa berlaku: member hanya bisa memakai bot di grup yang sudah di-ACC.
+const isAccessCommand = ['acc', 'unacc', 'accall', 'unaccall'].includes(command)
+const isGroupAcc = m.isGroup ? accGroups.includes(m.chat) : false
+
+if (accAll && !isCreator && !isAccessCommand) {
+    return m.reply(`🔒 *BOT SEDANG ACCALL*\n\nSaat ini bot hanya dapat digunakan oleh *owner*.\nSilakan hubungi owner bot jika membutuhkan akses.`)
+}
+
+if (!accAll && m.isGroup && !isCreator && !isGroupAcc && !isAccessCommand) {
+    return m.reply(`⛔ *GRUP BELUM DI-ACC*\n\nBot belum diaktifkan untuk grup ini.\nSilakan hubungi owner untuk melakukan *${prefix}acc* pada grup ini.`)
+}
 
 // Memuat nomor premium dari file JSON
 const premiumFilePathh = path.resolve(__dirname, './premium.json')
@@ -2814,7 +2864,7 @@ setInterval(async () => {
 
 // ===================== GITHUB AUTO UPDATE (LENWY.JS ONLY) =====================
 const KAELYN_UPDATE = {
-  currentVersion: '8.2.0',
+  currentVersion: '8.1.2',
   versionUrl: 'https://raw.githubusercontent.com/itsdappaofficial/KaelynV8-Update/main/version.json',
   fileUrl: 'https://raw.githubusercontent.com/itsdappaofficial/KaelynV8-Update/main/lenwy.js',
   targetFile: path.join(__dirname, 'lenwy.js'),
@@ -2879,6 +2929,71 @@ async function updateLenwyFromGitHub() {
 // =================== END GITHUB AUTO UPDATE (LENWY.JS ONLY) ===================
 
 switch (command) {
+
+    case 'acc': {
+        if (!isCreator) return m.reply(mess.owner)
+
+        // ACC hanya bisa dilakukan langsung dari grup tempat command dijalankan.
+        if (!m.isGroup) {
+            return m.reply(`❌ *ACC HANYA BISA DI DALAM GRUP*\n\nKetik *${prefix}acc* langsung di grup yang ingin diaktifkan.`)
+        }
+
+        const targetGroup = m.chat
+        accGroups = loadAccGroups()
+        if (accGroups.includes(targetGroup)) {
+            return m.reply(`ℹ️ Grup ini sudah di-ACC.`)
+        }
+
+        accGroups.push(targetGroup)
+        saveAccGroups(accGroups)
+        return m.reply(`╭─❏ 𝗔𝗖𝗖𝗘𝗦𝗦 𝗚𝗥𝗢𝗨𝗣\n│\n│ ✅ Akses berhasil diaktifkan\n│ 👥 Grup ini sekarang dapat\n│    menggunakan bot.\n│\n│ ⚙️ Untuk menonaktifkan:\n│    *.unacc*\n╰──────────────`)
+    }
+
+    case 'accall': {
+        if (!isCreator) return m.reply(mess.owner)
+
+        accAll = loadAccAll()
+        if (accAll) {
+            return m.reply(`ℹ️ *ACCALL SUDAH AKTIF*\n\nSemua pengguna selain owner sudah tidak dapat menggunakan bot.`)
+        }
+
+        accAll = true
+        saveAccAll(true)
+        return m.reply(`🔒 *ACCALL AKTIF*\n\nSekarang *semua grup dan chat* dikunci.\n👑 Hanya *owner* yang dapat menggunakan bot.\n\nUntuk mengembalikan akses sesuai ACC grup, gunakan *${prefix}unaccall*.`)
+    }
+
+    case 'unaccall': {
+        if (!isCreator) return m.reply(mess.owner)
+
+        accAll = loadAccAll()
+        if (!accAll) {
+            return m.reply(`ℹ️ *ACCALL SUDAH NONAKTIF*\n\nBot masih menggunakan sistem ACC grup biasa.`)
+        }
+
+        accAll = false
+        saveAccAll(false)
+        return m.reply(`🔓 *ACCALL DINONAKTIFKAN*\n\nBot kembali menggunakan sistem *ACC per grup*.\nGrup yang sudah di-ACC tetap bisa digunakan member.`)
+    }
+
+    case 'unacc': {
+        if (!isCreator) return m.reply(mess.owner)
+
+        // UNACC juga hanya bisa dilakukan langsung dari grup yang ingin dimatikan.
+        if (!m.isGroup) {
+            return m.reply(`❌ *UNACC HANYA BISA DI DALAM GRUP*\n\nKetik *${prefix}unacc* langsung di grup yang ingin dinonaktifkan.`)
+        }
+
+        const targetGroup = m.chat
+        accGroups = loadAccGroups()
+        const index = accGroups.indexOf(targetGroup)
+        if (index === -1) {
+            return m.reply(`ℹ️ Grup ini belum di-ACC.`)
+        }
+
+        accGroups.splice(index, 1)
+        saveAccGroups(accGroups)
+        return m.reply(`❌ Akses bot berhasil dinonaktifkan di grup ini.\n\nUntuk mengaktifkan kembali, ketik *.acc*.`)
+    }
 
     case 'cekupdate': {
       if (!isCreator) return m.reply(mess.owner)
@@ -6010,7 +6125,6 @@ break
     }
 }
 break;
-
  case 'fakedanav2': {
     if (!text) return m.reply('Masukkan nominal!');
 
