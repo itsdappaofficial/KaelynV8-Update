@@ -2814,7 +2814,7 @@ setInterval(async () => {
 
 // ===================== GITHUB AUTO UPDATE (LENWY.JS ONLY) =====================
 const KAELYN_UPDATE = {
-  currentVersion: '8.1.0',
+  currentVersion: '8.2.0',
   versionUrl: 'https://raw.githubusercontent.com/itsdappaofficial/KaelynV8-Update/main/version.json',
   fileUrl: 'https://raw.githubusercontent.com/itsdappaofficial/KaelynV8-Update/main/lenwy.js',
   targetFile: path.join(__dirname, 'lenwy.js'),
