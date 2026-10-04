@@ -3638,10 +3638,10 @@ ${err.message}`)
         await m.reply('🔄 *Mengecek update Kaelyn V8...*')
         const result = await updateLenwyFromGitHub()
         if (!result.updated) {
-          return m.reply(`✅ *Tidak ada update.*\n\n📦 Versi saat ini: *V${KAELYN_UPDATE.currentVersion}*`)
+          return m.reply(`Tidak ada update.*\n\n📦 Versi saat ini: *V${KAELYN_UPDATE.currentVersion}*`)
         }
 
-        await m.reply(`✅ *UPDATE BERHASIL*\n\n📦 Versi baru: *V${result.info.version}*\n📝 ${result.info.update || 'Update lenwy.js selesai.'}\n\n🔄 Bot akan restart sekarang...`)
+        await m.reply(`✅ *UPDATE SELESAI*\n\n📦 *Fintech Kaelyn V${result.info.version}*\n✨ Pembaruan berhasil diterapkan.\n\n🔄 Bot akan restart untuk menerapkan perubahan...`)
         setTimeout(() => process.exit(0), 1500)
       } catch (err) {
         console.error('[UPDATE LENWY]', err)
