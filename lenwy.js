@@ -1,3 +1,4 @@
+const { apiKey: kasirPayApiKey } = require('./kasirpayapikey');
 /* 
  This Script Was Created By Dappa-Official.
  My Contact > https://t.me/kieldppa
@@ -2736,13 +2737,15 @@ function savePaymentDB(db) {
 if (!global.paymentMemory) global.paymentMemory = {};
 
 
-// ===================== QRIS DEPOSIT PENDING =====================
-// Sistem ini menyiapkan transaksi pending + hook verifikasi pembayaran.
-// Pembayaran TIDAK dianggap sukses sebelum provider/API memanggil
-// global.handleVerifiedQrisPayment(...).
-const QRIS_DEPOSIT_PAYLOAD = '00020101021126610016ID.CO.SHOPEE.WWW01189360091800233468380208233468380303UMI51440014ID.CO.QRIS.WWW0215ID10265500236040303UMI5204581653033605802ID5914Dappa Official6015JAKARTA SELATAN61051215062070703A016304567A'
+// ===================== KASIRPAY QRIS TOPUP =====================
+// Top up saldo user memakai QRIS dinamis KasirPay.
+// API key bisa dipasang sebagai environment variable KASIRPAY_API_KEY
+// atau di kasirpayapikey.js pada property apiKey.
+const KASIRPAY_BASE_URL = process.env.KASIRPAY_BASE_URL || 'https://kasirpay.biz.id'
 const QRIS_PENDING_PATH = path.join(__dirname, 'datap', 'qris_pending.json')
 const QRIS_EXPIRE_MS = 15 * 60 * 1000
+const QRIS_POLL_MS = 5000
+const QRIS_MAX_POLL_MS = 15 * 60 * 1000
 
 if (!fs.existsSync(path.dirname(QRIS_PENDING_PATH))) fs.mkdirSync(path.dirname(QRIS_PENDING_PATH), { recursive: true })
 if (!fs.existsSync(QRIS_PENDING_PATH)) fs.writeFileSync(QRIS_PENDING_PATH, '{}')
@@ -2754,95 +2757,175 @@ function loadQrisPending() {
 function saveQrisPending(data) {
   fs.writeFileSync(QRIS_PENDING_PATH, JSON.stringify(data, null, 2))
 }
-function qrisCrc16(payload) {
-  let crc = 0xFFFF
-  for (let i = 0; i < payload.length; i++) {
-    crc ^= payload.charCodeAt(i) << 8
-    for (let j = 0; j < 8; j++) {
-      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF
-    }
-  }
-  return crc.toString(16).toUpperCase().padStart(4, '0')
-}
-function qrisParseTLV(payload) {
-  const items = []
-  let i = 0
-  while (i + 4 <= payload.length) {
-    const tag = payload.slice(i, i + 2)
-    const len = Number(payload.slice(i + 2, i + 4))
-    if (!Number.isInteger(len) || i + 4 + len > payload.length) break
-    items.push({ tag, value: payload.slice(i + 4, i + 4 + len) })
-    i += 4 + len
-  }
-  return items
-}
-function buildQrisDeposit(amount) {
-  const nominal = Number(amount)
-  if (!Number.isSafeInteger(nominal) || nominal <= 0) throw new Error('Nominal harus berupa angka bulat lebih dari 0.')
-  const source = QRIS_DEPOSIT_PAYLOAD.replace(/6304[0-9A-Fa-f]{4}$/, '')
-  const items = qrisParseTLV(source)
-  if (!items.length) throw new Error('Payload QRIS tidak valid.')
-  const filtered = items.filter(x => x.tag !== '54' && x.tag !== '63')
-  const poi = filtered.find(x => x.tag === '01')
-  if (poi) poi.value = '12'
-  const amountIndex = filtered.findIndex(x => ['55','58','59'].includes(x.tag))
-  filtered.splice(amountIndex >= 0 ? amountIndex : filtered.length, 0, { tag: '54', value: String(nominal) })
-  const body = filtered.map(x => `${x.tag}${String(x.value.length).padStart(2, '0')}${x.value}`).join('')
-  return `${body}6304${qrisCrc16(`${body}6304`)}`
-}
-function rupiah(n) { return new Intl.NumberFormat('id-ID').format(Number(n)) }
+function rupiah(n) { return new Intl.NumberFormat('id-ID').format(Number(n) || 0) }
 function qrisReference() {
   return `DEP${Date.now()}${crypto.randomBytes(4).toString('hex').toUpperCase()}`
 }
+
+function getKasirPayApiKey() {
+  return String(process.env.KASIRPAY_API_KEY || kasirPayApiKey || global.KASIRPAY_API_KEY || '').trim()
+}
+
+async function kasirPayRequest(endpoint, params = {}) {
+  const apiKey = getKasirPayApiKey()
+  if (!apiKey) throw new Error('API Key KasirPay belum diatur. Isi KASIRPAY_API_KEY di environment panel atau apiKey di kasirpayapikey.js.')
+
+  const url = new URL(endpoint, KASIRPAY_BASE_URL)
+  url.searchParams.set('apikey', apiKey)
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value))
+  }
+
+  const response = await axios.get(url.toString(), {
+    timeout: 30000,
+    headers: { Accept: 'application/json' }
+  })
+  return response.data
+}
+
+async function kasirPayQrToBuffer(qrImage, qrString) {
+  if (qrImage && String(qrImage).startsWith('data:image/')) {
+    return Buffer.from(String(qrImage).split(',')[1], 'base64')
+  }
+
+  if (qrImage && /^https?:\/\//i.test(String(qrImage))) {
+    const response = await axios.get(String(qrImage), {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      headers: { Accept: 'image/*' }
+    })
+    return Buffer.from(response.data)
+  }
+
+  if (qrString) {
+    const qrDataUrl = await qrcode.toDataURL(String(qrString), {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 900
+    })
+    return Buffer.from(qrDataUrl.replace(/^data:image\/png;base64,/, ''), 'base64')
+  }
+
+  throw new Error('QRIS dari KasirPay tidak ditemukan.')
+}
+
 async function deleteQrisMessage(item) {
   if (!item?.chatId || !item?.messageKey) return
   try { await lenwy.sendMessage(item.chatId, { delete: item.messageKey }) }
-  catch (e) { console.log('[QRIS] gagal hapus pesan:', e.message) }
-}
-async function expireQrisDeposit(reference) {
-  const dbq = loadQrisPending()
-  const item = dbq[reference]
-  if (!item || item.status !== 'pending') return
-  item.status = 'expired'
-  item.expiredAt = Date.now()
-  saveQrisPending(dbq)
-  await deleteQrisMessage(item)
+  catch (e) { console.log('[KASIRPAY] gagal hapus QR:', e.message) }
 }
 
-// Dipanggil oleh payment provider/webhook setelah transaksi benar-benar terverifikasi.
-global.handleVerifiedQrisPayment = async function ({ reference, amount, transactionId } = {}) {
+async function creditQrisDeposit(reference, requestedAmount, invoiceId, paidAmount) {
   const dbq = loadQrisPending()
   const item = dbq[reference]
   if (!item) return { ok: false, reason: 'deposit_not_found' }
   if (item.status === 'paid') return { ok: true, duplicate: true }
   if (item.status !== 'pending') return { ok: false, reason: `deposit_${item.status}` }
 
-  const paidAmount = Number(amount)
-  if (!Number.isSafeInteger(paidAmount) || paidAmount !== Number(item.amount)) {
+  const amount = Number(requestedAmount)
+  const verifiedAmount = Number(paidAmount)
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount !== Number(item.requestedAmount)) {
     return { ok: false, reason: 'amount_mismatch' }
   }
+  if (Number.isFinite(verifiedAmount) && verifiedAmount !== amount) {
+    return { ok: false, reason: 'provider_amount_mismatch' }
+  }
 
+  // Gunakan database saldo bot yang sudah ada: src/database.json -> users -> saldo.
+  if (!global.db.data.users[item.userId]) {
+    global.db.data.users[item.userId] = {
+      afkTime: -1,
+      afkReason: '',
+      limit: global.limitawal?.free || 0,
+      saldo: 0,
+      statusdepo: false,
+      level: 0,
+      autolevelup: true
+    }
+  }
   const user = global.db.data.users[item.userId]
-  if (!user) return { ok: false, reason: 'user_not_found' }
   if (!Number.isFinite(Number(user.saldo))) user.saldo = 0
-  user.saldo = Number(user.saldo) + paidAmount
+  user.saldo = Number(user.saldo) + amount
+  if ('statusdepo' in user) user.statusdepo = true
   saveDatabase()
 
   item.status = 'paid'
-  item.transactionId = transactionId || null
+  item.invoiceId = invoiceId || item.invoiceId || null
+  item.paidAmount = Number.isFinite(verifiedAmount) ? verifiedAmount : amount
+  item.creditedAmount = amount
   item.paidAt = Date.now()
   saveQrisPending(dbq)
   await deleteQrisMessage(item)
 
   try {
     await lenwy.sendMessage(item.chatId, {
-      text: `✅ *PEMBAYARAN BERHASIL*\n\n💰 Nominal: *Rp${rupiah(paidAmount)}*\n💳 Saldo ditambahkan: *Rp${rupiah(paidAmount)}*\n🧾 Ref: *${reference}*`
+      text: `✅ *PEMBAYARAN BERHASIL*\n\n💰 Top Up: *Rp${rupiah(amount)}*\n💳 Saldo bertambah: *Rp${rupiah(amount)}*\n💵 Saldo sekarang: *Rp${rupiah(user.saldo)}*\n🧾 Ref: *${reference}*\n🆔 Invoice: *${invoiceId || item.invoiceId || '-'}*`
     })
-  } catch (e) { console.log('[QRIS] gagal kirim notifikasi:', e.message) }
-  return { ok: true, credited: paidAmount, reference }
+  } catch (e) { console.log('[KASIRPAY] gagal kirim notifikasi:', e.message) }
+  return { ok: true, credited: amount, reference }
 }
 
-// Bersihkan transaksi yang sudah lewat masa berlaku.
+global.handleVerifiedQrisPayment = async function ({ reference, amount, invoiceId, transactionId, paidAmount } = {}) {
+  return creditQrisDeposit(reference, amount, invoiceId || transactionId, paidAmount || amount)
+}
+
+async function pollKasirPayDeposit(reference) {
+  const started = Date.now()
+  let lastStatus = 'pending'
+
+  while (Date.now() - started < QRIS_MAX_POLL_MS) {
+    const dbq = loadQrisPending()
+    const item = dbq[reference]
+    if (!item || item.status !== 'pending') return
+
+    try {
+      const result = await kasirPayRequest('/api/invoice/status', {
+        invoice_id: item.invoiceId
+      })
+      const status = String(result?.status || result?.data?.status || result?.invoice?.status || '').toLowerCase()
+      const providerAmount = Number(result?.amount ?? result?.data?.amount ?? result?.invoice?.amount)
+      lastStatus = status || lastStatus
+
+      if (status === 'paid' || status === 'success') {
+        const credited = await creditQrisDeposit(
+          reference,
+          item.requestedAmount,
+          item.invoiceId,
+          Number.isFinite(providerAmount) ? providerAmount : item.requestedAmount
+        )
+        if (!credited.ok) console.error('[KASIRPAY] deposit tidak dikreditkan:', credited.reason)
+        return
+      }
+
+      if (['expired', 'cancel', 'cancelled', 'failed'].includes(status)) {
+        const latest = loadQrisPending()
+        if (latest[reference] && latest[reference].status === 'pending') {
+          latest[reference].status = status === 'expired' ? 'expired' : 'cancelled'
+          latest[reference].expiredAt = Date.now()
+          latest[reference].lastProviderStatus = status
+          saveQrisPending(latest)
+          await deleteQrisMessage(latest[reference])
+        }
+        return
+      }
+    } catch (e) {
+      console.log(`[KASIRPAY] cek ${reference} gagal:`, e.message)
+    }
+
+    await new Promise(resolve => setTimeout(resolve, QRIS_POLL_MS))
+  }
+
+  const latest = loadQrisPending()
+  if (latest[reference] && latest[reference].status === 'pending') {
+    latest[reference].status = 'expired'
+    latest[reference].expiredAt = Date.now()
+    latest[reference].lastProviderStatus = lastStatus
+    saveQrisPending(latest)
+    await deleteQrisMessage(latest[reference])
+  }
+}
+
+// Bersihkan transaksi yang sudah melewati batas lokal.
 setInterval(async () => {
   const dbq = loadQrisPending()
   let changed = false
@@ -2861,7 +2944,7 @@ setInterval(async () => {
 
 // ===================== GITHUB AUTO UPDATE (LENWY.JS ONLY) =====================
 const KAELYN_UPDATE = {
-  currentVersion: '8.1.2',
+  currentVersion: '8.4.0',
   versionUrl: 'https://raw.githubusercontent.com/itsdappaofficial/KaelynV8-Update/main/version.json',
   fileUrl: 'https://raw.githubusercontent.com/itsdappaofficial/KaelynV8-Update/main/lenwy.js',
   targetFile: path.join(__dirname, 'lenwy.js'),
@@ -2923,9 +3006,551 @@ async function updateLenwyFromGitHub() {
 
   return { updated: true, info }
 }
-// =================== END GITHUB AUTO UPDATE (LENWY.JS ONLY) ===================
+// ===================== NOKOS PUSAT API =====================
+const NOKOS_API_BASE = 'https://nokospusat.com/api/v1'
+const NOKOS_DEFAULT_PROVIDER = String(process.env.NOKOS_PROVIDER || global.nokosProvider || 'provider_2').trim()
+const nokosPendingOrders = new Map()
+
+// =================== NOKOS USER BALANCE / REFUND ===================
+// KasirPay hanya untuk deposit. Saldo user tetap disimpan di database bot.
+// Saldo Nokos Pusat adalah saldo supplier yang diisi manual oleh owner.
+const NOKOS_TX_FILE = './database/nokosTransactions.json'
+const NOKOS_REFUND_STATUSES = new Set(['cancelled', 'canceled', 'expired', 'failed', 'rejected', 'cancel'])
+
+function loadNokosTransactions() {
+  try {
+    if (!fs.existsSync(NOKOS_TX_FILE)) return {}
+    const raw = fs.readFileSync(NOKOS_TX_FILE, 'utf8').trim()
+    return raw ? JSON.parse(raw) : {}
+  } catch (e) {
+    console.error('[NOKOS TX] gagal membaca transaksi:', e.message)
+    return {}
+  }
+}
+
+function saveNokosTransactions(data) {
+  try {
+    fs.mkdirSync(path.dirname(NOKOS_TX_FILE), { recursive: true })
+    fs.writeFileSync(NOKOS_TX_FILE, JSON.stringify(data, null, 2))
+    return true
+  } catch (e) {
+    console.error('[NOKOS TX] gagal menyimpan transaksi:', e.message)
+    return false
+  }
+}
+
+function recordNokosCharge(orderId, userId, amount, meta = {}) {
+  const db = loadNokosTransactions()
+  db[String(orderId)] = {
+    orderId: String(orderId),
+    userId: String(userId),
+    amount: Number(amount),
+    charged: true,
+    refunded: false,
+    createdAt: Date.now(),
+    ...meta
+  }
+  saveNokosTransactions(db)
+  return db[String(orderId)]
+}
+
+function updateNokosTransaction(orderId, patch = {}) {
+  const db = loadNokosTransactions()
+  const key = String(orderId)
+  if (!db[key]) return null
+  db[key] = { ...db[key], ...patch, updatedAt: Date.now() }
+  saveNokosTransactions(db)
+  return db[key]
+}
+
+async function refundNokosUserBalance(orderId, status = '') {
+  const key = String(orderId)
+  const normalizedStatus = String(status || '').toLowerCase()
+  if (!NOKOS_REFUND_STATUSES.has(normalizedStatus)) return { ok: false, skipped: true, reason: 'status_not_refundable' }
+
+  const db = loadNokosTransactions()
+  const tx = db[key]
+  if (!tx || !tx.charged) return { ok: false, skipped: true, reason: 'transaction_not_found_or_not_charged' }
+  if (tx.refunded) return { ok: true, alreadyRefunded: true, amount: Number(tx.amount) || 0 }
+
+  const userId = String(tx.userId)
+  const amount = Number(tx.amount)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    updateNokosTransaction(key, { refundError: 'Nominal refund tidak valid.' })
+    return { ok: false, reason: 'invalid_amount' }
+  }
+
+  const user = global.db?.data?.users?.[userId]
+  if (!user) {
+    updateNokosTransaction(key, { refundError: 'Data user tidak ditemukan.' })
+    return { ok: false, reason: 'user_not_found' }
+  }
+
+  if (!Number.isFinite(Number(user.saldo))) user.saldo = 0
+  user.saldo = Number(user.saldo) + amount
+  if ('statusdepo' in user) user.statusdepo = true
+  saveDatabase()
+
+  updateNokosTransaction(key, {
+    refunded: true,
+    refundedAt: Date.now(),
+    refundStatus: normalizedStatus,
+    refundAmount: amount
+  })
+
+  try {
+    await lenwy.sendMessage(userId, {
+      text: `↩️ *SALDO NOKOS DIKEMBALIKAN*\n\n🆔 Order: *${key}*\n📌 Status: *${normalizedStatus}*\n💰 Refund: *${nokosMoney(amount)}*\n💳 Saldo sekarang: *${nokosMoney(user.saldo)}*\n\nOrder supplier tidak berhasil diselesaikan, jadi saldo pembelian kamu dikembalikan otomatis.`
+    })
+  } catch (e) {
+    console.error('[NOKOS REFUND MESSAGE]', e.message)
+  }
+
+  return { ok: true, refunded: true, amount }
+}
+
+async function handleNokosTerminalStatus(orderId, status) {
+  return refundNokosUserBalance(orderId, status)
+}
+// =================== END NOKOS USER BALANCE / REFUND ===================
+
+function getNokosApiKey() {
+  return String(require('./nokosapikey').apiKey || global.nokosApiKey || '').trim()
+}
+
+function nokosHeaders(extra = {}) {
+  const key = getNokosApiKey()
+  if (!key) throw new Error('NOKOS_API_KEY belum diatur di environment panel.')
+  return { Accept: 'application/json', Authorization: `Bearer ${key}`, ...extra }
+}
+
+function nokosErrorMessage(error) {
+  const data = error?.response?.data
+  const code = data?.error?.code
+  const message = data?.error?.message
+  if (code && message) return `${code}: ${message}`
+  if (message) return message
+  if (error?.message) return error.message
+  return 'Permintaan ke API Nokos gagal.'
+}
+
+
+function nokosServiceIdFromInput(input, services) {
+  const index = Number.parseInt(String(input || '').trim(), 10) - 1
+  if (!Number.isInteger(index) || index < 0 || !Array.isArray(services)) return null
+  const item = services[index]
+  if (!item) return null
+  return item.slug || item.id || item.service_id || item.serviceId || item.code || item.service || null
+}
+
+async function nokosRequest(method, url, options = {}) {
+  try {
+    const response = await axios({
+      method,
+      url: `${NOKOS_API_BASE}${url}`,
+      timeout: 20000,
+      responseType: 'text',
+      transformResponse: [(data) => data],
+      validateStatus: () => true,
+      ...options,
+      headers: nokosHeaders(options.headers || {})
+    })
+
+    const raw = response.data
+
+    // Some providers return JSON with an unexpected BOM or plain-text/HTML
+    // error pages. Parse JSON ourselves so a parser error does not masquerade
+    // as a bot/code error.
+    let data = raw
+    if (typeof raw === 'string') {
+      const cleaned = raw.replace(/^\uFEFF/, '').trim()
+      if (cleaned) {
+        try {
+          data = JSON.parse(cleaned)
+        } catch (_) {
+          data = cleaned
+        }
+      }
+    }
+
+    if (response.status < 200 || response.status >= 300) {
+      const detail =
+        (data && typeof data === 'object' && (data.message || data.error)) ||
+        (typeof data === 'string' ? data.slice(0, 500) : `HTTP ${response.status}`)
+      throw new Error(`Nokos API HTTP ${response.status}: ${detail}`)
+    }
+
+    return data?.data ?? data
+  } catch (err) {
+    if (err?.response) {
+      const status = err.response.status
+      throw new Error(`Nokos API HTTP ${status}`)
+    }
+    throw new Error(err?.message || String(err))
+  }
+}
+
+function nokosArray(data) {
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.data)) return data.data
+  if (Array.isArray(data?.items)) return data.items
+  if (Array.isArray(data?.countries)) return data.countries
+  if (Array.isArray(data?.offers)) return data.offers
+  return []
+}
+
+function nokosMoney(value) { return `Rp${Number(value || 0).toLocaleString('id-ID')}` }
+
+function nokosPickOffer(offers, requestedProviderId = '') {
+  const list = nokosArray(offers).filter(x => Number(x?.stock ?? 0) > 0)
+  if (!list.length) return null
+  if (requestedProviderId) return list.find(x => String(x.provider_id || '').toLowerCase() === requestedProviderId.toLowerCase()) || null
+  return list.find(x => x.recommended === true) || list[0]
+}
+
+function nokosSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
+
+async function nokosFinishOrder(orderId) {
+  try { return await nokosRequest('POST', `/orders/${encodeURIComponent(orderId)}/finish`) }
+  catch (e) { console.error('[NOKOS FINISH]', nokosErrorMessage(e)); return null }
+}
+
+async function nokosPollOrder(orderId, chatId, senderId) {
+  if (nokosPendingOrders.has(orderId)) return
+  nokosPendingOrders.set(orderId, { chatId, senderId, startedAt: Date.now() })
+  try {
+    const maxWait = 20 * 60 * 1000
+    const started = Date.now()
+    let requestedNextOtp = false
+    while (Date.now() - started < maxWait) {
+      await nokosSleep(4000)
+      let order
+      try { order = await nokosRequest('GET', `/orders/${encodeURIComponent(orderId)}`) }
+      catch (e) { console.error('[NOKOS POLL]', nokosErrorMessage(e)); continue }
+      const status = String(order?.status || '').toLowerCase()
+      const otp = order?.otp?.code || (typeof order?.otp === 'string' ? order.otp : null)
+      const number = order?.number || order?.phone_number || order?.phone || '-'
+      if (otp) {
+        await lenwy.sendMessage(chatId, {
+          text: `🔐 *OTP NOKOS DITERIMA*\n\n📱 Nomor: *${number}*\n🔑 Kode OTP: *${otp}*\n🆔 Order: *${orderId}*\n\nSilakan gunakan kode tersebut.\n\n⚠️ *Jangan bagikan OTP ini kepada siapa pun.*`
+        })
+        await nokosFinishOrder(orderId)
+        return
+      }
+      if (!requestedNextOtp && ['waiting_otp', 'pending_otp', 'otp_pending'].includes(status)) {
+        requestedNextOtp = true
+        try { await nokosRequest('POST', `/orders/${encodeURIComponent(orderId)}/request-otp`) }
+        catch (e) { console.error('[NOKOS REQUEST OTP]', nokosErrorMessage(e)) }
+      }
+      if (NOKOS_REFUND_STATUSES.has(status)) {
+        const refund = await handleNokosTerminalStatus(orderId, status)
+        if (!refund.ok && !refund.skipped) console.error('[NOKOS REFUND]', refund.reason)
+        await lenwy.sendMessage(chatId, { text: `ℹ️ *Order Nokos ${status === 'expired' ? 'kedaluwarsa' : status === 'failed' || status === 'rejected' ? 'gagal' : 'dibatalkan'}*\n\n🆔 Order: *${orderId}*\n📱 Nomor: *${number}*${refund.refunded ? `\n💰 Saldo dikembalikan: *${nokosMoney(refund.amount)}*` : ''}` })
+        return
+      }
+    }
+    // Sebelum menyatakan timeout, cek status terakhir sekali lagi.
+    // Jika supplier ternyata sudah cancelled/expired/failed, refund langsung.
+    try {
+      const finalOrder = await nokosRequest('GET', `/orders/${encodeURIComponent(orderId)}`)
+      const finalStatus = String(finalOrder?.status || '').toLowerCase()
+      if (NOKOS_REFUND_STATUSES.has(finalStatus)) {
+        await handleNokosTerminalStatus(orderId, finalStatus)
+      }
+    } catch (e) {
+      console.error('[NOKOS FINAL STATUS]', nokosErrorMessage(e))
+    }
+    await lenwy.sendMessage(chatId, { text: `⏰ *Polling OTP dihentikan*\n\nOrder: *${orderId}*\nBot sudah menunggu sekitar 20 menit. Cek manual dengan *${prefix}nokoscek ${orderId}*.` })
+  } catch (e) { console.error('[NOKOS POLL]', e) }
+  finally { nokosPendingOrders.delete(orderId) }
+}
+// =================== END NOKOS PUSAT API ===================
+
+// ================== CONFIG BOT VIA WHATSAPP ==================
+// Mengubah setting yang berada langsung di len.js tanpa perlu masuk Panel.
+const configBotFields = {
+    botname: { type: 'string', label: 'Nama Bot', global: 'botname' },
+    ownername: { type: 'string', label: 'Nama Owner', global: 'ownername' },
+    developername: { type: 'string', label: 'Nama Developer', global: 'developername' },
+    emoji: { type: 'string', label: 'Emoji', global: 'emoji' },
+    packname: { type: 'string', label: 'Packname', global: 'packname' },
+    stickerauthor: { type: 'string', label: 'Author Sticker', global: 'author' },
+    author: { type: 'array', label: 'Daftar Nomor Owner (author.json)', global: 'owner' },
+    imgallmenu: { type: 'string', label: 'Foto Menu', global: 'imgallmenu' },
+    idch: { type: 'string', label: 'ID Channel', global: 'idch' },
+    namach: { type: 'string', label: 'Nama Channel', global: 'namach' },
+    apikey: { type: 'string', label: 'API Key Dappa', global: 'API_key' },
+    nomorown: { type: 'array', label: 'Nomor Owner', global: 'nomorOwn' },
+    developer: { type: 'array', label: 'Nomor Developer', global: 'developer' },
+    bot: { type: 'array', label: 'Nomor Bot', global: 'bot' },
+    author: { type: 'array', label: 'Daftar Nomor Owner (author.json)', global: 'owner' }
+}
+
+function setConfigBot(key, value) {
+    const item = configBotFields[key]
+    if (!item) return { ok: false, error: 'Setting tidak ditemukan.' }
+
+    if (key === 'author') {
+        const values = String(value).split(/[;,]/).map(v => v.trim().replace(/[^0-9]/g, '')).filter(Boolean)
+        if (!values.length) return { ok: false, error: 'Nomor owner tidak valid.' }
+        const authorPath = path.join(__dirname, 'author.json')
+        fs.writeFileSync(authorPath, JSON.stringify(values, null, 2), 'utf8')
+        global.owner = values
+        return { ok: true, label: 'Daftar Nomor Owner (author.json)', value: values }
+    }
+
+    const lenPath = path.join(__dirname, 'len.js')
+    let source = fs.readFileSync(lenPath, 'utf8')
+    const escapedGlobal = item.global.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const pattern = new RegExp(`^\\s*global\\.${escapedGlobal}\\s*=.*$`, 'm')
+
+    let parsedValue
+    if (item.type === 'array') {
+        const values = String(value)
+            .split(/[;,]/)
+            .map(v => v.trim().replace(/[^0-9]/g, ''))
+            .filter(Boolean)
+        if (!values.length) return { ok: false, error: 'Nomor tidak valid.' }
+        parsedValue = values
+    } else {
+        parsedValue = String(value).trim()
+        if (!parsedValue) return { ok: false, error: 'Nilai tidak boleh kosong.' }
+    }
+
+    const serialized = JSON.stringify(parsedValue)
+    if (!pattern.test(source)) {
+        return { ok: false, error: `Baris global.${item.global} tidak ditemukan di len.js.` }
+    }
+
+    source = source.replace(pattern, `global.${item.global} = ${serialized}`)
+    fs.writeFileSync(lenPath, source, 'utf8')
+
+    // Terapkan langsung ke proses berjalan. len.js juga memiliki fs.watchFile,
+    // sehingga perubahan akan tetap dimuat ulang saat file berubah.
+    global[item.global] = parsedValue
+    return { ok: true, label: item.label, value: parsedValue }
+}
+
+function configBotMenu(prefix) {
+    return `╭─❏ *SETTING BOT VIA BOT*\n│\n├─ 1. Nama Bot        : botname\n├─ 2. Foto Menu       : imgallmenu\n├─ 3. ID Channel      : idch\n├─ 4. Nama Channel    : namach\n├─ 5. API Key         : apikey\n├─ 6. Nomor Owner     : nomorown\n├─ 7. Nomor Developer : developer\n├─ 8. Nomor Bot       : bot\n├─ 9. Daftar Owner    : author\n├─ 10. Nama Owner     : ownername\n├─ 11. Nama Developer : developername\n├─ 12. Emoji          : emoji\n├─ 13. Packname       : packname\n╰─ 14. Author Sticker : stickerauthor\n\n╭─❏ *FORMAT SETTING*\n│\n├─ ${prefix}setconfig botname|Nama Bot Baru\n├─ ${prefix}setconfig imgallmenu|https://...\n├─ ${prefix}setconfig idch|120xxx@newsletter\n├─ ${prefix}setconfig namach|Dappa Official\n├─ ${prefix}setconfig apikey|API_KEY_BARU\n├─ ${prefix}setconfig author|62812xxxx,62813xxxx\n├─ ${prefix}setconfig ownername|Nama Owner\n├─ ${prefix}setconfig developername|Nama Developer\n├─ ${prefix}setconfig emoji|🪷\n├─ ${prefix}setconfig packname|Fintech\n├─ ${prefix}setconfig stickerauthor|Dappa Official\n├─ ${prefix}setconfig nomorown|62812xxxx,62813xxxx\n├─ ${prefix}setconfig developer|62812xxxx,62813xxxx\n├─ ${prefix}setconfig bot|62812xxxx\n╰─ Nomor bisa dipisah koma\n\n╰━━━━━━━━━━━━━━━━━━`
+}
+// ================== END CONFIG BOT VIA WHATSAPP ==================
 
 switch (command) {
+
+case 'ceklid': {
+    const raw = String(text || '').trim();
+    const nomor = raw.replace(/[^0-9]/g, '');
+    if (!nomor || nomor.length < 8) {
+        return m.reply(`Contoh: *${prefix}ceklid 6281241390366*`);
+    }
+
+    const pnJid = `${nomor}@s.whatsapp.net`;
+    let lid = '';
+    const mapping = lenwy?.signalRepository?.lidMapping;
+
+    // Dukungan beberapa bentuk API pada fork Baileys yang berbeda.
+    try {
+        if (typeof mapping?.getLIDForPN === 'function') {
+            const found = await mapping.getLIDForPN(pnJid);
+            lid = typeof found === 'string' ? found : (found?.lid || found?.id || found?.jid || '');
+        }
+    } catch (e) {
+        console.error('[CEKLID getLIDForPN]', e?.message || e);
+    }
+
+    if (!lid) {
+        try {
+            if (typeof lenwy?.findUserId === 'function') {
+                const found = await lenwy.findUserId(pnJid);
+                lid = found?.lid || found?.id || found?.jid || '';
+            }
+        } catch (e) {
+            console.error('[CEKLID findUserId]', e?.message || e);
+        }
+    }
+
+    if (lid) {
+        lid = String(lid).split(':')[0];
+        if (!lid.endsWith('@lid')) lid = `${lid.replace(/@.*$/, '')}@lid`;
+        const lidNumber = lid.split('@')[0];
+        return m.reply(`╭━━〔 *CEK LID* 〕━━╮\n│ • Nomor : ${nomor}\n│ • LID : ${lidNumber}\n│ • JID : ${lid}\n╰━━━━━━━━━━━━━━`);
+    }
+
+    return m.reply(`╭━━〔 *CEK LID* 〕━━╮\n│ • Nomor : ${nomor}\n│ • LID : Belum ditemukan\n│ • JID : Belum tersedia\n│\n│ Mapping nomor ke LID belum tersedia di sesi bot ini. Coba cek nomor yang pernah berinteraksi dengan bot/grup.\n╰━━━━━━━━━━━━━━`);
+}
+break
+
+case 'setconfig': {
+    if (!isCreator) return m.reply(mess.owner)
+
+    if (!text || !text.includes('|')) {
+        return m.reply(configBotMenu(prefix))
+    }
+
+    const separator = text.indexOf('|')
+    const key = text.slice(0, separator).trim().toLowerCase()
+    const value = text.slice(separator + 1).trim()
+
+    const result = setConfigBot(key, value)
+    if (!result.ok) return m.reply(`❌ *Gagal mengubah config*\n\n${result.error}`)
+
+    const shownValue = key === 'apikey'
+        ? '••••••••••••••••'
+        : Array.isArray(result.value) ? result.value.join(', ') : result.value
+
+    return m.reply(`╭─❏ *CONFIG BERHASIL DIUBAH*\n│\n│ ✅ ${result.label}\n│ 📝 Nilai: *${shownValue}*\n│\n│ 🔄 Config di ${'len.js'} sudah diperbarui.\n│ Tidak perlu masuk Panel lagi.\n╰──────────────`)
+}
+break
+
+case 'setbotname':
+case 'setimgmenu':
+case 'setidch':
+case 'setnamach':
+case 'setapikey':
+case 'setownername':
+case 'setdevelopername':
+case 'setemoji':
+case 'setpackname':
+case 'setauthor': {
+    if (!isCreator) return m.reply(mess.owner)
+
+    const aliasMap = {
+        setbotname: 'botname',
+        setimgmenu: 'imgallmenu',
+        setidch: 'idch',
+        setnamach: 'namach',
+        setapikey: 'apikey',
+        setownername: 'ownername',
+        setdevelopername: 'developername',
+        setemoji: 'emoji',
+        setpackname: 'packname',
+        setauthor: 'stickerauthor'
+    }
+    if (!text) return m.reply(`❌ Masukkan nilai.\n\nContoh: *${prefix}${command} nilai_baru*`)
+
+    const key = aliasMap[command]
+    const result = setConfigBot(key, text)
+    if (!result.ok) return m.reply(`❌ *Gagal*\n\n${result.error}`)
+
+    return m.reply(`✅ *${result.label} berhasil diubah.*\n\n🔄 Setting sudah disimpan ke *len.js*.`)
+}
+break
+
+case 'antiripper': {
+    if (!m.isGroup) return m.reply('Fitur ini hanya bisa dipakai di grup.');
+    if (!isAdmins && !isCreator) return m.reply('⛔ Khusus admin grup.');
+    const fs = require('fs');
+    const file = path.join(__dirname, 'riper.json');
+    let db = { groups: {}, entries: {} };
+    try { db = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    db.groups ||= {}; db.entries ||= {};
+    const mode = (args[0] || '').toLowerCase();
+    if (!['on', 'off'].includes(mode)) return m.reply(`🛡️ *PENGATURAN ANTIRIPPER*\n\nStatus: *${db.groups[m.chat]?.enabled ? 'ON' : 'OFF'}*\nGunakan: ${prefix}antiripper on / off`);
+    db.groups[m.chat] = { ...(db.groups[m.chat] || {}), enabled: mode === 'on' };
+    fs.writeFileSync(file, JSON.stringify(db, null, 2));
+    return m.reply(mode === 'on'
+      ? '🛡️ *ANTIRIPPER AKTIF*\n\nPemeriksaan anggota baru sudah dinyalakan untuk grup ini.'
+      : '🌙 *ANTIRIPPER NONaktif*\n\nPemeriksaan otomatis dihentikan untuk grup ini.');
+}
+case 'addripper': {
+    if (!isCreator && (!m.isGroup || !isAdmins)) return m.reply('⛔ Perintah ini khusus owner/admin grup.');
+    const raw = (args[0] || '').trim();
+    if (!raw) return m.reply(`Format: ${prefix}addripper 628xxxxxxxxxx atau LID\nContoh: ${prefix}addripper 6281234567890`);
+    const digits = raw.replace(/[^0-9]/g, '');
+    if (digits.length < 6) return m.reply('ID/nomor tidak valid.');
+    const isLid = raw.includes('@lid') || (!raw.startsWith('+') && digits.length >= 15);
+    const key = isLid ? `${digits}@lid` : `${digits}@s.whatsapp.net`;
+    const fs = require('fs'); const file = path.join(__dirname, 'riper.json');
+    let db = { groups: {}, entries: {} }; try { db = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    db.groups ||= {}; db.entries ||= {};
+    const reason = args.slice(1).join(' ').trim() || 'Terdaftar pada database internal';
+    db.entries[key] = { key, value: digits, type: isLid ? 'lid' : 'phone', reason, addedBy: m.sender, addedAt: new Date().toISOString() };
+    fs.writeFileSync(file, JSON.stringify(db, null, 2));
+    return m.reply(`✅ *DATA DISIMPAN*\n\n${isLid ? 'LID' : 'Nomor'}: ${digits}\nCatatan: ${reason}\n\nPencocokan otomatis aktif pada grup yang mengaktifkan AntiRipper.`);
+}
+case 'delripper': {
+    if (!isCreator && (!m.isGroup || !isAdmins)) return m.reply('⛔ Perintah ini khusus owner/admin grup.');
+    const digits = (args[0] || '').replace(/[^0-9]/g, '');
+    if (!digits) return m.reply(`Format: ${prefix}delripper nomor_atau_lid`);
+    const file = path.join(__dirname, 'riper.json'); const fs = require('fs');
+    let db = { groups: {}, entries: {} }; try { db = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    db.entries ||= {};
+    let removed = 0;
+    for (const [key, item] of Object.entries(db.entries)) if (key.split('@')[0] === digits || item.value === digits) { delete db.entries[key]; removed++; }
+    fs.writeFileSync(file, JSON.stringify(db, null, 2));
+    return m.reply(removed ? `🗑️ Data ${digits} berhasil dihapus.` : `Data ${digits} tidak ditemukan.`);
+}
+case 'checkripper': {
+    const digits = (args[0] || '').replace(/[^0-9]/g, '');
+    if (!digits) return m.reply(`Format: ${prefix}checkripper nomor_atau_lid`);
+    const fs = require('fs'); let db = { entries: {} }; try { db = JSON.parse(fs.readFileSync(path.join(__dirname, 'riper.json'), 'utf8')); } catch {}
+    const found = Object.values(db.entries || {}).find(x => x.value === digits || x.key?.split('@')[0] === digits);
+    return m.reply(found ? `🔎 *DATA DITEMUKAN*\nID: ${found.value}\nJenis: ${found.type}\nCatatan: ${found.reason}` : '🔎 Data tidak ditemukan dalam database.');
+}
+case 'listripper': {
+    if (!isCreator && (!m.isGroup || !isAdmins)) return m.reply('⛔ Daftar ini khusus owner/admin grup.');
+    const fs = require('fs'); let db = { entries: {} }; try { db = JSON.parse(fs.readFileSync(path.join(__dirname, 'riper.json'), 'utf8')); } catch {}
+    const rows = Object.values(db.entries || {});
+    return m.reply(rows.length ? `╭─❏ *DATABASE RIPPER*\n│ Total data: ${rows.length}\n│\n${rows.map((x, i) => `├ ${i + 1}. ${x.value}\n│   Jenis: ${x.type}\n│   Catatan: ${x.reason}`).join('\n')}\n╰──────────────` : 'Database masih kosong.');
+}
+
+
+case 'setconfig': {
+    if (!isCreator) return m.reply(mess.owner)
+
+    if (!text || !text.includes('|')) {
+        return m.reply(configBotMenu(prefix))
+    }
+
+    const separator = text.indexOf('|')
+    const key = text.slice(0, separator).trim().toLowerCase()
+    const value = text.slice(separator + 1).trim()
+
+    const result = setConfigBot(key, value)
+    if (!result.ok) return m.reply(`❌ *Gagal mengubah config*\n\n${result.error}`)
+
+    const shownValue = key === 'apikey'
+        ? '••••••••••••••••'
+        : Array.isArray(result.value) ? result.value.join(', ') : result.value
+
+    return m.reply(`╭─❏ *CONFIG BERHASIL DIUBAH*\n│\n│ ✅ ${result.label}\n│ 📝 Nilai: *${shownValue}*\n│\n│ 🔄 Config di ${'len.js'} sudah diperbarui.\n│ Tidak perlu masuk Panel lagi.\n╰──────────────`)
+}
+break
+
+case 'setbotname':
+case 'setimgmenu':
+case 'setidch':
+case 'setnamach':
+case 'setapikey':
+case 'setownername':
+case 'setdevelopername':
+case 'setemoji':
+case 'setpackname':
+case 'setauthor': {
+    if (!isCreator) return m.reply(mess.owner)
+
+    const aliasMap = {
+        setbotname: 'botname',
+        setimgmenu: 'imgallmenu',
+        setidch: 'idch',
+        setnamach: 'namach',
+        setapikey: 'apikey',
+        setownername: 'ownername',
+        setdevelopername: 'developername',
+        setemoji: 'emoji',
+        setpackname: 'packname',
+        setauthor: 'stickerauthor'
+    }
+    if (!text) return m.reply(`❌ Masukkan nilai.\n\nContoh: *${prefix}${command} nilai_baru*`)
+
+    const key = aliasMap[command]
+    const result = setConfigBot(key, text)
+    if (!result.ok) return m.reply(`❌ *Gagal*\n\n${result.error}`)
+
+    return m.reply(`✅ *${result.label} berhasil diubah.*\n\n🔄 Setting sudah disimpan ke *len.js*.`)
+}
+break
 
     case 'acc': {
         if (!isCreator) return m.reply(mess.owner)
@@ -2999,7 +3624,7 @@ switch (command) {
         if (!info.available) {
           return m.reply(`✅ *Kaelyn V8 sudah versi terbaru*\n\n📦 Versi sekarang: *V${KAELYN_UPDATE.currentVersion}*\n📝 ${info.update || 'Tidak ada catatan update.'}`)
         }
-        return m.reply(`🆕 *UPDATE TERSEDIA*\n\n📦 Versi sekarang: *V${KAELYN_UPDATE.currentVersion}*\n🚀 Versi terbaru: *V${info.version}*\n📝 ${info.update || 'Ada pembaruan terbaru.'}\n\nKetik *${prefix}update* untuk memperbarui lenwy.js.`)
+        return m.reply(`🆕 *PEMBARUAN TERSEDIA*\n\n📦 *Fintech Kaelyn V${info.version}*\n🚀 Versi terbaru telah tersedia.\n\nKetik *${prefix}update* untuk memperbarui script kamu.`)
       } catch (err) {
         console.error('[CEK UPDATE]', err)
         return m.reply(`❌ Gagal mengecek update.\n
@@ -3027,20 +3652,44 @@ ${err.message}`)
 
     case 'deposit':
     case 'depositqris':
-    case 'qrisdeposit': {
-      if (!text) return m.reply(`Contoh: *${prefix + command} 5000*`)
+    case 'qrisdeposit':
+    case 'topup':
+    case 'topupsaldo': {
+      if (!text) return m.reply(`Contoh: *${prefix + command} 10000*`)
       try {
         const raw = text.trim().replace(/[^0-9]/g, '')
         const amount = Number(raw)
-        if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('Nominal tidak valid.')
+        if (!Number.isSafeInteger(amount) || amount < 1000) throw new Error('Minimal top up Rp1.000.')
+        if (!getKasirPayApiKey()) throw new Error('API Key KasirPay belum diatur.')
 
+        // KasirPay menggunakan GET /api/invoice dengan parameter apikey + amount.
+        const result = await kasirPayRequest('/api/invoice', { amount })
+
+console.log(
+  '[KASIRPAY CREATE RESPONSE]',
+  JSON.stringify(result, null, 2)
+)
+        const invoice = result?.data || result?.invoice || result
+        const invoiceId = invoice?.invoice_id || invoice?.invoiceId || invoice?.id
+        const invoiceAmount = Number(invoice?.amount ?? amount)
+        const fee = Number(invoice?.fee || 0)
+        const total = Number(invoice?.total ?? (invoiceAmount + fee))
+        const expiredAt = invoice?.expired_at || new Date(Date.now() + QRIS_EXPIRE_MS).toISOString()
+        const qrImage = invoice?.qris_image || invoice?.qr_image || invoice?.qrImage
+        const qrString = invoice?.qris_string || invoice?.qr_string || invoice?.qrString
+
+        if (!invoiceId) throw new Error('Invoice ID dari KasirPay tidak ditemukan.')
+        if (!Number.isSafeInteger(invoiceAmount) || invoiceAmount !== amount) {
+          throw new Error('Nominal invoice KasirPay tidak sesuai dengan nominal deposit.')
+        }
+        if (!qrImage && !qrString) throw new Error('QRIS dari KasirPay tidak ditemukan.')
+
+        const imageBuffer = await kasirPayQrToBuffer(qrImage, qrString)
         const reference = qrisReference()
-        const payload = buildQrisDeposit(amount)
-        const qrDataUrl = await qrcode.toDataURL(payload, { errorCorrectionLevel: 'M', margin: 2, width: 900 })
-        const data = Buffer.from(qrDataUrl.replace('data:image/png;base64,', ''), 'base64')
+
         const sent = await lenwy.sendMessage(from, {
-          image: data,
-          caption: `╭━━〔 *DEPOSIT QRIS* 〕━━╮\n┃ 💰 Nominal: *Rp${rupiah(amount)}*\n┃ 🧾 Ref: *${reference}*\n┃ ⏳ Berlaku: *15 menit*\n┃\n┃ Silakan scan & bayar QR di atas.\n┃ Setelah pembayaran terverifikasi,\n┃ saldo akan masuk otomatis.\n╰━━━━━━━━━━━━━━━━━━╯`
+          image: imageBuffer,
+          caption: `╭━━〔 *DEPOSIT QRIS* 〕━━╮\n┃ 💰 Deposit: *Rp${rupiah(amount)}*\n┃ 💸 Fee: *Rp${rupiah(fee)}*\n┃ 💳 Total bayar: *Rp${rupiah(total)}*\n┃ 🧾 Ref: *${reference}*\n┃ 🆔 Invoice: *${invoiceId}*\n┃ ⏳ Berlaku sampai: *${new Date(expiredAt).toLocaleString('id-ID')}*\n┃\n┃ Silakan scan & bayar QRIS di atas.\n┃ Setelah pembayaran terverifikasi,\n┃ saldo bot akan bertambah otomatis.\n╰━━━━━━━━━━━━━━━━━━╯`,
         }, { quoted: m })
 
         const dbq = loadQrisPending()
@@ -3048,29 +3697,161 @@ ${err.message}`)
           reference,
           userId: m.sender,
           chatId: from,
-          amount,
+          requestedAmount: amount,
+          providerAmount: invoiceAmount,
+          fee,
+          total,
+          invoiceId,
           status: 'pending',
           createdAt: Date.now(),
+          expiredAt,
           messageKey: sent.key
         }
         saveQrisPending(dbq)
+
+        // KasirPay menyediakan status invoice lewat GET /api/invoice/status.
+        pollKasirPayDeposit(reference).catch(err => console.error('[KASIRPAY POLL]', err))
       } catch (err) {
-        console.error('[QRIS DEPOSIT]', err)
-        m.reply(`❌ Gagal membuat QRIS deposit: ${err.message}`)
+        console.error('[KASIRPAY TOPUP]', err)
+        m.reply(`❌ *Gagal membuat Deposit QRIS*\n\n${err.message}`)
       }
       break
+    }
+
+    // Resolve target owner ke PN/JID nomor WhatsApp asli.
+    // Jangan pernah menganggap angka @lid sebagai nomor HP.
+    async function resolveOwnerJid(jid, chatJid = from) {
+        if (!jid) return ''
+        let value = String(jid).trim()
+        if (!value) return ''
+
+        // Sudah PN/JID nomor.
+        if (value.endsWith('@s.whatsapp.net')) return value
+
+        // Beberapa wrapper Baileys bisa memberi participantPn/remoteJidAlt langsung.
+        if (value.endsWith('@lid')) {
+            try {
+                const mapping = lenwy?.signalRepository?.lidMapping
+                if (mapping?.getPNForLID) {
+                    const pn = await mapping.getPNForLID(value)
+                    if (pn && String(pn).endsWith('@s.whatsapp.net')) return String(pn).split(':')[0]
+                }
+            } catch (e) {
+                console.error('[OWNER LID MAPPING]', e)
+            }
+
+            // Beberapa fork Baileys menyediakan findUserId(LID) -> { phoneNumber, lid }.
+            try {
+                if (typeof lenwy?.findUserId === 'function') {
+                    const found = await lenwy.findUserId(value)
+                    const pn = found?.phoneNumber || found?.jid || found?.pn
+                    if (pn && String(pn).endsWith('@s.whatsapp.net')) return String(pn).split(':')[0]
+                }
+            } catch (e) {
+                console.error('[OWNER FIND USER ID]', e)
+            }
+
+            // Fallback penting untuk tag di grup: GroupMetadata menyimpan pasangan LID/PN
+            // pada participant/contact jika mapping lokal belum tersedia.
+            try {
+                if (chatJid && String(chatJid).endsWith('@g.us') && typeof lenwy?.groupMetadata === 'function') {
+                    const meta = await lenwy.groupMetadata(chatJid)
+                    const wanted = value.split('@')[0]
+                    const participant = (meta?.participants || []).find(p => {
+                        const ids = [p?.id, p?.lid, p?.jid, p?.participant].filter(Boolean).map(String)
+                        return ids.some(id => id === value || id.split('@')[0] === wanted)
+                    })
+                    // Pada beberapa versi Baileys, participant.id adalah PN asli
+                    // sedangkan participant.lid adalah LID. Jangan abaikan participant.id.
+                    const pnCandidates = [
+                        participant?.phoneNumber,
+                        participant?.phoneNumberJid,
+                        participant?.pn,
+                        participant?.jidPn,
+                        participant?.participantPn,
+                        participant?.participantAlt,
+                        participant?.remoteJidAlt,
+                        participant?.jid,
+                        participant?.idPn,
+                        participant?.phoneJid,
+                        participant?.id
+                    ].filter(Boolean)
+                    const pn = pnCandidates.find(x => String(x).endsWith('@s.whatsapp.net'))
+                    if (pn) return String(pn).split(':')[0]
+                }
+            } catch (e) {
+                console.error('[OWNER GROUP LID RESOLVE]', e)
+            }
+        }
+        return ''
+    }
+
+    function normalizeOwnerNumber(value) {
+        if (!value) return ''
+        let nomor = String(value).split('@')[0].split(':')[0].replace(/[^0-9]/g, '')
+        if (!nomor) return ''
+        if (nomor.startsWith('0')) nomor = '62' + nomor.slice(1)
+        return nomor.startsWith('62') ? nomor : ''
+    }
+
+    // Ambil PN dari mention/reply. Prioritaskan field PN alternatif sebelum @lid.
+    async function getOwnerTargetJid() {
+        const ctx = m?.message?.extendedTextMessage?.contextInfo || m?.message?.imageMessage?.contextInfo || m?.message?.videoMessage?.contextInfo || {}
+        const taggedJid = Array.isArray(ctx?.mentionedJid) && ctx.mentionedJid.length ? ctx.mentionedJid[0] : (Array.isArray(mentionByTag) && mentionByTag.length ? mentionByTag[0] : '')
+        const quoted = m.quoted
+        const repliedJid = quoted?.sender || ctx?.participant || mentionByReply || ''
+
+        const candidates = [
+            // PN alternatif dari pesan yang di-reply / sender pesan sekarang
+            quoted?.key?.participantPn,
+            quoted?.key?.participantAlt,
+            quoted?.key?.remoteJidAlt,
+            quoted?.participantPn,
+            quoted?.senderPn,
+            ctx?.participantPn,
+            ctx?.participantAlt,
+            // mention PN alternatif jika tersedia di fork Baileys
+            ...(Array.isArray(ctx?.mentionedJidPn) ? ctx.mentionedJidPn : []),
+            ...(Array.isArray(ctx?.mentionedJidAlt) ? ctx.mentionedJidAlt : []),
+            taggedJid,
+            repliedJid
+        ].filter(Boolean)
+
+        for (const candidate of candidates) {
+            if (String(candidate).endsWith('@s.whatsapp.net')) return String(candidate).split(':')[0]
+            const resolved = await resolveOwnerJid(candidate, from)
+            if (resolved && resolved.endsWith('@s.whatsapp.net')) return resolved
+        }
+        return ''
     }
 
     case 'addowner': {
         if (!isCreator) return m.reply(mess.owner)
 
-        let nomor = q.replace(/[^0-9]/g, '')
+        // Target bisa diambil dari:
+        // 1. Nomor manual: .addowner 628xxxx
+        // 2. Tag: .addowner @628xxxx
+        // 3. Reply chat orang: .addowner (reply pesan target)
+        const explicitRaw = String(q || '').trim()
+        const explicitNumber = /^(?:\+?62|0)\d{8,15}$/.test(explicitRaw) ? explicitRaw.replace(/\D/g, '') : ''
+        let targetJid = ''
+        let nomor = ''
+
+        if (explicitNumber) {
+            nomor = explicitNumber
+            targetJid = `${nomor}@s.whatsapp.net`
+        } else {
+            targetJid = await getOwnerTargetJid()
+            if (targetJid) nomor = targetJid.split('@')[0].replace(/[^0-9]/g, '')
+        }
+
         if (!nomor) {
-            return m.reply(`Format salah!\n\nContoh: ${prefix}addowner 6281234567890`)
+            return m.reply(`Format salah!\n\nGunakan salah satu:\n• ${prefix}addowner 6281234567890\n• ${prefix}addowner @6281234567890\n• Reply chat orang lalu ketik ${prefix}addowner`)
         }
 
         // Hilangkan awalan 0 agar tersimpan dalam format internasional
         if (nomor.startsWith('0')) nomor = '62' + nomor.slice(1)
+        targetJid = `${nomor}@s.whatsapp.net`
 
         const ownerFile = './author.json'
         let ownerList = []
@@ -3081,33 +3862,54 @@ ${err.message}`)
         }
 
         if (!Array.isArray(ownerList)) ownerList = []
+        ownerList = ownerList.map(v => String(v).replace(/[^0-9]/g, '')).filter(Boolean)
+
         if (ownerList.includes(nomor)) {
-            return m.reply(`❌ Nomor ${nomor} sudah terdaftar sebagai owner.`)
+            const replyTarget = m.quoted?.fakeObj || m
+            return lenwy.sendMessage(from, {
+                text: `❌ @${nomor} sudah terdaftar sebagai owner.`,
+                mentions: [targetJid]
+            }, { quoted: replyTarget })
         }
 
         ownerList.push(nomor)
         fs.writeFileSync(ownerFile, JSON.stringify(ownerList, null, 2))
 
-        // Sinkronkan daftar owner yang dipakai sistem saat ini
-        // `author` dipakai oleh command owner dan pengecekan isCreator,
-        // jadi harus ikut diperbarui tanpa perlu restart bot.
+        // Sinkronkan daftar owner yang dipakai sistem saat ini tanpa restart bot.
         author.length = 0
         author.push(...ownerList)
         global.owner = ownerList
-        return m.reply(`✅ Berhasil menambahkan @${nomor} sebagai owner bot.`, m.chat, {
-            mentions: [`${nomor}@s.whatsapp.net`]
-        })
+
+        const replyTarget = m.quoted?.fakeObj || m
+        return lenwy.sendMessage(from, {
+            text: `✅ Berhasil menambahkan @${nomor} sebagai owner bot.`,
+            mentions: [targetJid]
+        }, { quoted: replyTarget })
     }
 
     case 'delowner': {
         if (!isCreator) return m.reply(mess.owner)
 
-        let nomor = q.replace(/[^0-9]/g, '')
+        // Sama seperti addowner: nomor manual, tag, atau reply chat.
+        const explicitRaw = String(q || '').trim()
+        const explicitNumber = /^(?:\+?62|0)\d{8,15}$/.test(explicitRaw) ? explicitRaw.replace(/\D/g, '') : ''
+        let targetJid = ''
+        let nomor = ''
+
+        if (explicitNumber) {
+            nomor = explicitNumber
+            targetJid = `${nomor}@s.whatsapp.net`
+        } else {
+            targetJid = await getOwnerTargetJid()
+            if (targetJid) nomor = targetJid.split('@')[0].replace(/[^0-9]/g, '')
+        }
+
         if (!nomor) {
-            return m.reply(`Format salah!\n\nContoh: ${prefix}delowner 6281234567890`)
+            return m.reply(`Format salah!\n\nGunakan salah satu:\n• ${prefix}delowner 6281234567890\n• ${prefix}delowner @6281234567890\n• Reply chat orang lalu ketik ${prefix}delowner`)
         }
 
         if (nomor.startsWith('0')) nomor = '62' + nomor.slice(1)
+        targetJid = `${nomor}@s.whatsapp.net`
 
         const ownerFile = './author.json'
         let ownerList = []
@@ -3118,28 +3920,35 @@ ${err.message}`)
         }
 
         if (!Array.isArray(ownerList)) ownerList = []
+        ownerList = ownerList.map(v => String(v).replace(/[^0-9]/g, '')).filter(Boolean)
 
-        // Jangan sampai owner terakhir ikut terhapus
+        // Jangan sampai owner terakhir ikut terhapus.
         if (ownerList.length <= 1) {
             return m.reply('❌ Tidak bisa menghapus owner terakhir.')
         }
 
         const indexOwner = ownerList.indexOf(nomor)
         if (indexOwner === -1) {
-            return m.reply(`❌ Nomor ${nomor} tidak terdaftar sebagai owner.`)
+            const replyTarget = m.quoted?.fakeObj || m
+            return lenwy.sendMessage(from, {
+                text: `❌ @${nomor} tidak terdaftar sebagai owner.`,
+                mentions: [targetJid]
+            }, { quoted: replyTarget })
         }
 
         ownerList.splice(indexOwner, 1)
         fs.writeFileSync(ownerFile, JSON.stringify(ownerList, null, 2))
 
-        // Sinkronkan array `author` yang dipakai langsung oleh sistem.
+        // Sinkronkan array author yang dipakai langsung oleh sistem.
         author.length = 0
         author.push(...ownerList)
         global.owner = ownerList
 
-        return m.reply(`✅ Berhasil menghapus @${nomor} dari owner bot.`, m.chat, {
-            mentions: [`${nomor}@s.whatsapp.net`]
-        })
+        const replyTarget = m.quoted?.fakeObj || m
+        return lenwy.sendMessage(from, {
+            text: `✅ Berhasil menghapus @${nomor} dari owner bot.`,
+            mentions: [targetJid]
+        }, { quoted: replyTarget })
     }
 
     case 'listowner': {
@@ -3378,6 +4187,8 @@ let anu = `
 │ 𝅄𑣿…  𝖧𝖽𝗆𝖾𝗇𝗎
 │ 𝅄𑣿…  𝖣𝗈𝗐𝗇𝗅𝗈𝖺𝖽𝗆𝖾𝗇𝗎
 │ 𝅄𑣿…  Apikeydappamenu
+│ 𝅄𑣿…  Antirippermenu
+│ 𝅄𑣿…  Nokosmenu 
 ╰ 𝅄𑣿…  Randommenu
 
 𝖼⃘𐀔 *꒰꒰* *𝗌𝖾𝗐𝖺*? 𝗄𝖾𝗍𝗂𝗄 *𝖮𝗐𝗇𝖾𝗋* 𝖽𝗂 𝗀𝗋𝗎𝖻 *꒱꒱*ㅤㅤ
@@ -3463,6 +4274,10 @@ let anu = `
 │ 𝅄𑣿…  𝗉𝖾𝗋𝗉𝖺𝗇𝗃𝖺𝗇𝗀𝗌𝖾𝗐𝖺
 │ 𝅄𑣿…  𝖽𝖾𝗅𝗌𝖾𝗐𝖺
 │ 𝅄𑣿…  𝗅𝗂𝗌𝗍𝗌𝖾𝗐𝖺
+│ 𝅄𑣿…  acc (aktifkan bot group) 
+│ 𝅄𑣿…  unacc (nonaktifkan bot group) 
+│ 𝅄𑣿…  accall (aktifkan semua) 
+│ 𝅄𑣿…  unaccall (nonaktifkan semua) 
 │ 𝅄𑣿…  setaudio (reply audio)
 │ 𝅄𑣿…  resetaudio (audio bawaan)
 │ 𝅄𑣿…  addowner (628xx) 
@@ -3581,6 +4396,23 @@ let anu = `
 │ 𝅄𑣿…  beliapikey
 ╰ 𝅄𑣿…  cekapikey
 
+╭┈ ⁞⁞  ࣪࣪  ֵ  *Anti Ripper Menu*   ⁞⁞
+│ 𝅄𑣿…  antiripper (on/off)
+│ 𝅄𑣿…  addripper (628xx)
+│ 𝅄𑣿…  delripper (628xx) 
+│ 𝅄𑣿…  listripper
+╰ 𝅄𑣿…  ceklid
+
+╭┈ ⁞⁞  ࣪࣪  ֵ  *Nokos Menu*   ⁞⁞
+│ 𝅄𑣿…  nokos 
+│ 𝅄𑣿…  nokoswilayah
+│ 𝅄𑣿…  nokosbuy
+│ 𝅄𑣿…  nokoscek
+│ 𝅄𑣿…  nokosriwayat
+│ 𝅄𑣿…  nokoscancel
+│ 𝅄𑣿…  ceksaldo  
+╰ 𝅄𑣿…  deposit
+ 
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Random Menu*   ⁞⁞
 │ 𝅄𑣿…  idch
 │ 𝅄𑣿…  rvo
@@ -3600,7 +4432,6 @@ let anu = `
 │ 𝅄𑣿…  tebakangka
 │ 𝅄𑣿…  ayatkursi
 │ 𝅄𑣿…  katagalau
-│ 𝅄𑣿…  katadappa
 │ 𝅄𑣿…  katawindah
 │ 𝅄𑣿…  katamiawaug
 ╰ 𝅄𑣿…  kataprabowo
@@ -3679,8 +4510,33 @@ m.reply (`
  `)
  }
  break
+ 
+ case 'antirippermenu' : {
+m.reply (`
+╭┈ ⁞⁞  ࣪࣪  ֵ  *Anti Ripper Menu*   ⁞⁞
+│ 𝅄𑣿…  antiripper (on/off)
+│ 𝅄𑣿…  addripper (628xx)
+│ 𝅄𑣿…  delripper (628xx) 
+│ 𝅄𑣿…  listripper
+╰ 𝅄𑣿…  ceklid
+ `)
+ }
+ break
 
-
+case 'nokosmenu' : {
+m.reply (`
+╭┈ ⁞⁞  ࣪࣪  ֵ  *Nokos Menu*   ⁞⁞
+│ 𝅄𑣿…  nokos 
+│ 𝅄𑣿…  nokoswilayah
+│ 𝅄𑣿…  nokosbuy
+│ 𝅄𑣿…  nokoscek
+│ 𝅄𑣿…  nokosriwayat
+│ 𝅄𑣿…  nokoscancel
+│ 𝅄𑣿…  ceksaldo  
+╰ 𝅄𑣿…  deposit
+ `)
+ }
+ break
 
 // OWNER MENU
 case 'ownermenu': {
@@ -3693,6 +4549,10 @@ m.reply(`
 │ 𝅄𑣿…  𝗉𝖾𝗋𝗉𝖺𝗇𝗃𝖺𝗇𝗀𝗌𝖾𝗐𝖺
 │ 𝅄𑣿…  𝖽𝖾𝗅𝗌𝖾𝗐𝖺
 │ 𝅄𑣿…  𝗅𝗂𝗌𝗍𝗌𝖾𝗐𝖺
+│ 𝅄𑣿…  acc (aktifkan bot group) 
+│ 𝅄𑣿…  unacc (nonaktifkan bot group) 
+│ 𝅄𑣿…  accall (aktifkan semua) 
+│ 𝅄𑣿…  unaccall (nonaktifkan semua)
 │ 𝅄𑣿…  setaudio (reply audio)
 │ 𝅄𑣿…  resetaudio (audio bawaan) 
 │ 𝅄𑣿…  addowner (628xx) 
@@ -3851,7 +4711,6 @@ m.reply(`
 │ 𝅄𑣿…  tebakangka
 │ 𝅄𑣿…  ayatkursi
 │ 𝅄𑣿…  katagalau
-│ 𝅄𑣿…  katadappa
 │ 𝅄𑣿…  katawindah
 │ 𝅄𑣿…  katamiawaug
 ╰ 𝅄𑣿…  kataprabowo
@@ -7656,10 +8515,10 @@ case 'Linny bot': {
     let userSession = sessions[m.sender] || "";
     try {
         let question = userSession ? `${userSession}\n${text}` : text;
-        var URL = "https://meitang.xyz/openai";
+        var openaiUrl = "https://meitang.xyz/openai";
         let { data } = await axios({
             method: "GET",
-            url: URL,
+            url: openaiUrl,
             params: { text: question }
         });
         if (data.status) {
@@ -8177,8 +9036,15 @@ m.reply(mess.success)
 break
         
         case 'bot': {
-let settextbot = global.db.data.chats[m.chat]?.text_bot || `tumben ingat aku, kirain udah move on ke bot lain wkwkwk`
-lenwy.sendMessage(m.chat, { text: settextbot}, { quoted: fkontak})
+    let jid = m.sender
+    let nomor = jid.split('@')[0]
+
+    let settextbot = global.db.data.chats[m.chat]?.text_bot || `haloo sayang @${nomor} gimana kabarmu hari ini? semoga semuanya baik-baik aja yaa.`
+
+    lenwy.sendMessage(m.chat, {
+        text: settextbot,
+        mentions: [jid]
+    }, { quoted: fkontak })
 }
 break
         
@@ -9504,10 +10370,10 @@ break
 
 //===============================================================================================================================================================//
 
-  case 'owner':
-  case 'creator':
-  case 'developet': {
-  try { 
+case 'owner':
+case 'creator':
+case 'developer': {
+  try {
     const contacts = author.map((number, i) => ({
       displayName: `Owner ${i + 1}`,
       vcard: `
@@ -9527,13 +10393,19 @@ END:VCARD`.trim()
       }
     }, { quoted: m });
 
-    await lenwy.sendMessage(m.chat, { text: `owners bisa dihubungi di sini ya kak, jangan lupa di sapa` }, { quoted: m });
+    let jid = m.sender;
+    let nomor = jid.split('@')[0];
+
+    await lenwy.sendMessage(m.chat, {
+      text: `jika ada yang ingin disampaikan, owner selalu siap mendengarkan @${nomor} 💗`,
+      mentions: [jid]
+    }, { quoted: m });
 
   } catch (err) {
     console.error('Error in owner/creator/developer command:', err);
     m.reply('⚠️ Terjadi kesalahan saat menampilkan kontak owner.');
   }
-  break      
+  break;
 }
   /*case 'owner':
   case 'creator': 
@@ -13310,6 +14182,331 @@ case 'fetch': {
     m.reply(`error` + e)
   }
 }
+
+case 'nokos':
+case 'nokoslist': {
+  try {
+    const services = nokosArray(await nokosRequest('GET', '/services'))
+    if (!services.length) return m.reply('❌ Tidak ada layanan Nokos yang tersedia saat ini.')
+    const args = text.trim().split(/\s+/).filter(Boolean)
+    const page = Math.max(1, Number(args[0]) || 1)
+    const perPage = 8
+    const totalPages = Math.max(1, Math.ceil(services.length / perPage))
+    const currentPage = Math.min(page, totalPages)
+    const start = (currentPage - 1) * perPage
+    const items = services.slice(start, start + perPage)
+    let teks = `╭─❏ *LAYANAN NOKOS*\n│\n│ 📄 Halaman: *${currentPage}/${totalPages}*\n│\n`
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      const no = start + i + 1
+      const id = item.slug || item.id || item.service_id || '-'
+      const name = item.name || item.title || id
+
+      // Harga yang ditampilkan harus sama dengan harga offer yang akan dipakai
+      // oleh .nokosbuy (provider default + Indonesia). Jangan memakai item.price
+      // dari /services karena harga katalog dapat berbeda dari harga offer.
+      let displayPrice = null
+      let displayStock = null
+      let displayServer = ''
+      try {
+        const offers = await nokosRequest(
+          'GET',
+          `/services/${encodeURIComponent(id)}/offers?provider=${encodeURIComponent(NOKOS_DEFAULT_PROVIDER)}&country_code=indonesia`
+        )
+        const offer = nokosPickOffer(offers)
+        if (offer) {
+          displayPrice = Number(offer.price)
+          displayStock = offer.stock
+          displayServer = offer.server_label || offer.provider_id || ''
+        }
+      } catch (_) {}
+
+      teks += `│ ${String(no).padStart(2, '0')}. *${name}*\n`
+      teks += `│     Kode: \`${id}\`\n`
+      teks += `│     💰 Harga: *${displayPrice != null && Number.isFinite(displayPrice) ? nokosMoney(displayPrice) : '-'}*`
+      if (displayStock != null) teks += ` • 📦 Stok: *${Number(displayStock).toLocaleString('id-ID')}*`
+      else if (item.stock != null) teks += ` • 📦 Stok: *${Number(item.stock).toLocaleString('id-ID')}*`
+      if (displayServer) teks += `\n│     🖥️ Server: *${displayServer}*`
+      teks += `\n│\n`
+    }
+    teks += `╰──────────────\n\n🛒 *CARA BELI*\n\`${prefix}nokosbuy <nomor>\`\n\n💡 Contoh:\n\`${prefix}nokosbuy 1\`\n\`${prefix}nokosbuy 2\`\n\n📌 Harga di atas adalah harga offer yang dipakai saat pembelian. Jika memilih server sendiri, harga dapat berbeda.`
+    if (currentPage < totalPages) teks += `\n\n➡️ Halaman berikutnya: \`${prefix}nokos ${currentPage + 1}\``
+    if (currentPage > 1) teks += `\n⬅️ Halaman sebelumnya: \`${prefix}nokos ${currentPage - 1}\``
+    return m.reply(teks)
+  } catch (e) { return m.reply(`❌ *Gagal mengambil layanan Nokos*\n\n${nokosErrorMessage(e)}`) }
+}
+break
+
+case 'nokoswilayah':
+case 'nokoscountries': {
+  if (!text) return m.reply(`❌ Masukkan nomor layanan.\n\nContoh:\n*${prefix}nokoswilayah 1*`)
+  const parts = text.trim().split(/\s+/).filter(Boolean)
+  let serviceInput = parts[0]
+  const pageArg = parts[1]
+  let serviceId = serviceInput
+  let serviceName = serviceInput
+
+  try {
+    // Allow both the displayed service number and the real service ID.
+    const serviceResponse = await nokosRequest('GET', '/services')
+    const services = nokosArray(serviceResponse)
+    if (/^\d+$/.test(String(serviceInput))) {
+      const resolved = nokosServiceIdFromInput(serviceInput, services)
+      if (!resolved) return m.reply(`❌ Layanan nomor *${serviceInput}* tidak ditemukan.\n\nKetik *${prefix}nokos* untuk melihat daftar layanan.`)
+      serviceId = String(resolved)
+    }
+    const service = services.find(x => String(x.slug || x.id || x.service_id || '').toLowerCase() === String(serviceId).toLowerCase())
+    if (!service) return m.reply(`❌ Layanan *${serviceInput}* tidak ditemukan.\n\nKetik *${prefix}nokos* untuk melihat daftar layanan.`)
+    serviceName = service.name || service.title || serviceId
+
+    // nokoswilayah is informational: show the actual purchasable server offers
+    // for the default country. It is NOT required for a normal purchase.
+    const countryCode = 'indonesia'
+    const offersResponse = await nokosRequest(
+      'GET',
+      `/services/${encodeURIComponent(serviceId)}/offers?provider=${encodeURIComponent(NOKOS_DEFAULT_PROVIDER)}&country_code=${encodeURIComponent(countryCode)}`
+    )
+    let offers = nokosArray(offersResponse).filter(o => {
+      const stock = Number(o.stock)
+      return !Number.isFinite(stock) || stock > 0
+    })
+    if (!offers.length) return m.reply(`❌ Tidak ada server yang tersedia untuk *${serviceName}* saat ini.`)
+
+    const perPage = 8
+    const totalPages = Math.max(1, Math.ceil(offers.length / perPage))
+    const page = Math.max(1, Number(pageArg) || 1)
+    const currentPage = Math.min(page, totalPages)
+    const start = (currentPage - 1) * perPage
+    const items = offers.slice(start, start + perPage)
+
+    let teks = `╭─❏ *SERVER / WILAYAH NOKOS*\n│\n│ 📱 Layanan: *${serviceName}*\n│ 🌍 Wilayah: *Indonesia*\n│ 📄 Halaman: *${currentPage}/${totalPages}*\n│\n`
+    items.forEach((offer, i) => {
+      const no = start + i + 1
+      const providerId = String(offer.provider_id || offer.providerId || offer.server || '-')
+      const server = offer.server_label || offer.server_name || providerId
+      const price = Number(offer.price)
+      const stock = offer.stock != null ? Number(offer.stock).toLocaleString('id-ID') : '-'
+      teks += `│ ${String(no).padStart(2, '0')}. *${server}*\n`
+      teks += `│     Server: \`${providerId}\`\n`
+      teks += `│     💰 Harga: *${Number.isFinite(price) ? nokosMoney(price) : '-'}* • 📦 Stok: *${stock}*\n│\n`
+    })
+    teks += `╰──────────────\n\n🛒 *CARA BELI*\n\`${prefix}nokosbuy ${services.indexOf(service) + 1}\` → pilih otomatis\n\`${prefix}nokosbuy ${services.indexOf(service) + 1} <server>\` → pilih server\n\n💡 Contoh:\n\`${prefix}nokosbuy ${services.indexOf(service) + 1}\`\n\`${prefix}nokosbuy ${services.indexOf(service) + 1} virtual34\``
+    if (currentPage < totalPages) teks += `\n\n➡️ Berikutnya: \`${prefix}nokoswilayah ${services.indexOf(service) + 1} ${currentPage + 1}\``
+    if (currentPage > 1) teks += `\n⬅️ Sebelumnya: \`${prefix}nokoswilayah ${services.indexOf(service) + 1} ${currentPage - 1}\``
+    return m.reply(teks)
+  } catch (e) { return m.reply(`❌ *Gagal mengambil server/wilayah Nokos*\n\n${nokosErrorMessage(e)}`) }
+}
+break
+
+case 'nokossaldo':
+case 'saldonokos': {
+  try {
+    const wallet = await nokosRequest('GET', '/wallet')
+    const balance = wallet?.balance ?? wallet?.available_balance ?? wallet?.amount ?? 0
+    return m.reply(`💰 *SALDO NOKOS*\n\nSaldo: *${nokosMoney(balance)}*\nMata uang: *${wallet?.currency || 'IDR'}*`)
+  } catch (e) { return m.reply(`❌ *Gagal cek saldo Nokos*\n\n${nokosErrorMessage(e)}`) }
+}
+break
+
+case 'nokosbuy':
+        // User-facing format: .nokosbuy <number> [server]
+        // Resolve the displayed number to the real API service ID.
+        const requestedServiceNumber = args?.[0];
+        if (requestedServiceNumber && /^\d+$/.test(String(requestedServiceNumber))) {
+          try {
+            const serviceList = await nokosRequest('GET', '/services');
+            const services = Array.isArray(serviceList)
+              ? serviceList
+              : (serviceList?.services || serviceList?.data || []);
+            const resolvedServiceId = nokosServiceIdFromInput(requestedServiceNumber, services);
+            if (!resolvedServiceId) {
+              m.reply(`❌ Layanan nomor ${requestedServiceNumber} tidak ditemukan.\n\nKetik *nokos* untuk melihat daftar layanan.`);
+              break;
+            }
+            args[0] = resolvedServiceId;
+          } catch (e) {
+            m.reply(`❌ Gagal mengambil layanan Nokos\n\n${e.message || e}`);
+            break;
+          }
+        }
+
+case 'belinokos':
+        // Format:
+        // .nokosbuy <nomor>
+        // .nokosbuy <nomor> <server>
+        // .nokosbuy <nomor> <country> <server>
+        const nokosInputService = args?.[0];
+        if (nokosInputService && /^\d+$/.test(String(nokosInputService))) {
+          try {
+            const serviceResponse = await nokosRequest('GET', '/services');
+            const serviceList = nokosArray(serviceResponse);
+            const resolvedServiceId = nokosServiceIdFromInput(nokosInputService, serviceList);
+
+            if (!resolvedServiceId) {
+              return m.reply(`❌ Layanan ${nokosInputService} tidak ditemukan.\n\nKetik *${prefix}nokos* untuk melihat layanan.`);
+            }
+
+            args[0] = String(resolvedServiceId);
+          } catch (e) {
+            return m.reply(`❌ Gagal mengambil layanan Nokos\n\n${nokosErrorMessage(e)}`);
+          }
+        }
+ {
+  if (!text) return m.reply(`❌ Format kurang lengkap.\n\nContoh:\n*${prefix}nokosbuy 1*\n\nAtau pilih server tertentu:\n*${prefix}nokosbuy 1 virtual34*\n\nLihat layanan: *${prefix}nokos*`)
+  const parts = text.trim().split(/\s+/)
+  // Jika user memasukkan nomor layanan, resolver di atas sudah mengubah
+  // args[0] menjadi slug asli (contoh: 2 -> adidas-id).
+  const serviceId = String(args?.[0] || parts[0] || '').trim()
+
+  // Format fleksibel:
+  // .nokosbuy 2
+  // .nokosbuy 2 virtual34
+  // .nokosbuy 2 indonesia virtual34
+  let countryCode = 'indonesia'
+  let requestedProviderId = ''
+  let provider = NOKOS_DEFAULT_PROVIDER
+
+  if (parts[1]) {
+    const second = String(parts[1]).trim()
+    const third = parts[2] ? String(parts[2]).trim() : ''
+
+    let secondIsCountry = false
+    try {
+      const countryCheck = nokosArray(await nokosRequest(
+        'GET',
+        `/services/${encodeURIComponent(serviceId)}/countries?provider=${encodeURIComponent(provider)}`
+      ))
+      secondIsCountry = countryCheck.some(c =>
+        String(c.country_code || c.code || c.slug || c.id || '').toLowerCase() === second.toLowerCase()
+      )
+    } catch (_) {}
+
+    if (secondIsCountry) {
+      countryCode = second
+      if (third) requestedProviderId = third
+    } else {
+      requestedProviderId = second
+      if (third) countryCode = third
+    }
+  }
+  try {
+    const services = nokosArray(await nokosRequest('GET', '/services'))
+    const service = services.find(x => String(x.slug || x.id || x.service_id || '').toLowerCase() === serviceId.toLowerCase())
+    if (!service) return m.reply(`❌ Layanan *${serviceId}* tidak ditemukan.\n\nKetik *${prefix}nokos* untuk melihat layanan.`)
+    const countries = nokosArray(await nokosRequest('GET', `/services/${encodeURIComponent(serviceId)}/countries?provider=${encodeURIComponent(provider)}`))
+    const country = countries.find(c => String(c.country_code || c.code || c.slug || c.id || '').toLowerCase() === countryCode.toLowerCase())
+    if (!country && countries.length) return m.reply(`❌ Wilayah *${countryCode}* tidak tersedia untuk layanan *${serviceId}* dengan provider *${provider}*.\n\nGunakan *${prefix}nokoswilayah ${serviceId}*.`)
+    const offers = await nokosRequest('GET', `/services/${encodeURIComponent(serviceId)}/offers?provider=${encodeURIComponent(provider)}&country_code=${encodeURIComponent(countryCode)}`)
+    const offer = nokosPickOffer(offers, requestedProviderId)
+    if (!offer) return m.reply(`❌ Tidak ada penawaran server yang memiliki stok untuk *${serviceId} / ${countryCode}*.`)
+    const quotedPrice = Number(offer.price)
+    const providerId = String(offer.provider_id || '')
+    if (!providerId || !Number.isFinite(quotedPrice) || quotedPrice <= 0) return m.reply('❌ Data penawaran Nokos tidak valid (provider_id/price).')
+    // Saldo pembelian Nokos memakai saldo internal user yang diisi lewat KasirPay.
+    // Saldo wallet Nokos Pusat tetap merupakan saldo akun provider, bukan saldo user.
+    const user = global.db.data.users[m.sender] || (global.db.data.users[m.sender] = { saldo: 0 })
+    if (!Number.isFinite(Number(user.saldo))) user.saldo = 0
+    const userSaldo = Number(user.saldo)
+    if (userSaldo < quotedPrice) return m.reply(`❌ *Saldo tidak cukup*\n\n💰 Saldo kamu: *${nokosMoney(userSaldo)}*\n💵 Harga Nokos: *${nokosMoney(quotedPrice)}*\n\nSilakan gunakan *${prefix}deposit ${quotedPrice}* untuk menambah saldo via QRIS.`)
+
+    await m.reply(`⏳ *Menyiapkan pembelian Nokos...*\n\n📱 Layanan: *${service.name || service.title || serviceId}*\n🌍 Wilayah: *${countryCode}*\n🖥️ Server: *${offer.server_label || providerId}*\n💰 Harga: *${nokosMoney(quotedPrice)}*\n💳 Saldo kamu: *${nokosMoney(userSaldo)}*\n📦 Stok: *${offer.stock ?? '-'}*`)
+    const idempotencyKey = `wa-${m.sender.replace(/[^0-9A-Za-z]/g, '')}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
+    const order = await nokosRequest('POST', '/orders', {
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      data: { service_id: serviceId, provider, country_code: countryCode, provider_id: providerId, quoted_price: quotedPrice }
+    })
+    if (!order?.id) return m.reply('❌ Order dibuat tetapi ID order tidak ditemukan dari API Nokos. Saldo kamu belum dipotong.')
+
+    // Potong saldo user hanya setelah API Nokos mengonfirmasi order berhasil dibuat.
+    // Harga final harus sama dengan harga yang dikutip agar tidak ada selisih tak terduga.
+    const finalPrice = Number(order.price ?? quotedPrice)
+    if (!Number.isFinite(finalPrice) || finalPrice <= 0 || finalPrice !== quotedPrice) {
+      console.error('[NOKOS SALDO] Harga final berbeda dari quote:', { quotedPrice, finalPrice, orderId: order.id })
+      return m.reply(`⚠️ *Order Nokos berhasil dibuat, tetapi harga final berbeda dari harga awal.*\n\n🆔 Order: *${order.id}*\n💰 Harga awal: *${nokosMoney(quotedPrice)}*\n💵 Harga final: *${nokosMoney(finalPrice)}*\n\nSaldo belum dipotong otomatis. Hubungi admin untuk penyelesaian transaksi.`)
+    }
+    if (Number(user.saldo) < finalPrice) {
+      return m.reply(`⚠️ *Order Nokos sudah dibuat, tetapi saldo kamu tidak mencukupi saat penyelesaian.*\n\n🆔 Order: *${order.id}*\n💰 Harga: *${nokosMoney(finalPrice)}*\n💳 Saldo: *${nokosMoney(user.saldo)}*\n\nHubungi admin untuk penyelesaian transaksi.`)
+    }
+    user.saldo = Number(user.saldo) - finalPrice
+    if ('statusdepo' in user) user.statusdepo = true
+    saveDatabase()
+    // Catat debit setelah saldo benar-benar tersimpan agar order terminal
+    // (cancelled/expired/failed) dapat direfund tepat satu kali.
+    recordNokosCharge(order.id, m.sender, finalPrice, {
+      serviceId,
+      countryCode,
+      provider,
+      providerId,
+      status: String(order.status || 'pending').toLowerCase()
+    })
+    const number = order.number || order.phone_number || order.phone || '-'
+
+    // Order dibuat dari grup, tetapi nomor/OTP dikirim hanya ke private chat pemesan.
+    // Grup hanya menerima notifikasi bahwa order berhasil dibuat.
+    await m.reply(`╭─❏ *NOKOS BERHASIL*\n│\n│ 🆔 Order: *${order.id}*\n│ 🌍 Wilayah: *${countryCode}*\n│ 🖥️ Server: *${offer.server_label || providerId}*\n│ 💰 Harga: *${nokosMoney(order.price ?? quotedPrice)}*\n│ 📌 Status: *${order.status || 'pending'}*\n│\n╰──────────────\n\n📩 *Nomor dan OTP akan dikirim ke private chat kamu.*`)
+
+    try {
+      await lenwy.sendMessage(m.sender, {
+        text: `╭─❏ *NOKOS BERHASIL*\n│\n│ 📱 Nomor: *${number}*\n│ 🆔 Order: *${order.id}*\n│ 🌍 Wilayah: *${countryCode}*\n│ 🖥️ Server: *${offer.server_label || providerId}*\n│ 💰 Harga: *${nokosMoney(order.price ?? quotedPrice)}*\n│ 📌 Status: *${order.status || 'pending'}*\n│\n╰──────────────\n\n⏳ *Menunggu OTP otomatis...*\n\n🔐 Jangan bagikan OTP kepada orang lain.`
+      })
+    } catch (privateErr) {
+      console.error('[NOKOS PRIVATE MESSAGE]', privateErr)
+      await m.reply(`⚠️ Order berhasil dibuat, tetapi bot tidak dapat mengirim pesan private ke akun kamu.\n\n🆔 Order: *${order.id}*\nSilakan chat bot secara pribadi terlebih dahulu, lalu gunakan *${prefix}nokoscek ${order.id}*.`)
+    }
+
+    // Polling OTP diarahkan ke private chat pemesan, bukan grup.
+    nokosPollOrder(order.id, m.sender, m.sender).catch(err => console.error('[NOKOS POLL START]', err))
+  } catch (e) { return m.reply(`❌ *Pembelian Nokos gagal*\n\n${nokosErrorMessage(e)}`) }
+}
+break
+
+case 'nokoscek':
+case 'ceknokos': {
+  if (!text) return m.reply(`❌ Masukkan ID order.\n\nContoh: *${prefix}nokoscek order_example*`)
+  const orderId = text.trim().split(/\s+/)[0]
+  try {
+    const order = await nokosRequest('GET', `/orders/${encodeURIComponent(orderId)}`)
+    const currentStatus = String(order?.status || '').toLowerCase()
+    if (NOKOS_REFUND_STATUSES.has(currentStatus)) {
+      await handleNokosTerminalStatus(orderId, currentStatus)
+    }
+    const otp = order?.otp?.code || (typeof order?.otp === 'string' ? order.otp : null)
+    const number = order?.number || order?.phone_number || order?.phone || '-'
+    return m.reply(`╭─❏ *STATUS NOKOS*\n│\n│ 🆔 Order: *${order?.id || orderId}*\n│ 📱 Nomor: *${number}*\n│ 📌 Status: *${order?.status || '-'}*\n│ 🔐 OTP: *${otp || 'Belum masuk'}*\n│ 💰 Harga: *${nokosMoney(order?.price)}*\n│\n╰──────────────`)
+  } catch (e) { return m.reply(`❌ *Gagal cek order Nokos*\n\n${nokosErrorMessage(e)}`) }
+}
+break
+
+case 'nokosriwayat':
+case 'riwayatnokos': {
+  try {
+    const page = Math.max(1, Number(text?.trim()) || 1)
+    const history = await nokosRequest('GET', `/orders?page=${page}&limit=20`)
+    const orders = nokosArray(history)
+    if (!orders.length) return m.reply(`📭 Tidak ada riwayat order Nokos pada halaman *${page}*.`)
+    let teks = `╭─❏ *RIWAYAT NOKOS*\n│ Halaman: *${page}*\n│\n`
+    orders.forEach((o, i) => {
+      const id = o.id || '-'
+      const number = o.number || o.phone_number || o.phone || '-'
+      teks += `│ ${i + 1}. *${id}*\n│    📱 ${number}\n│    📌 ${o.status || '-'} | ${nokosMoney(o.price)}\n`
+    })
+    teks += `╰──────────────`
+    return m.reply(teks)
+  } catch (e) { return m.reply(`❌ *Gagal mengambil riwayat Nokos*\n\n${nokosErrorMessage(e)}`) }
+}
+break
+
+case 'nokoscancel':
+case 'cancelnokos': {
+  if (!text) return m.reply(`❌ Masukkan ID order.\n\nContoh: *${prefix}nokoscancel order_example*`)
+  const orderId = text.trim().split(/\s+/)[0]
+  try {
+    const order = await nokosRequest('DELETE', `/orders/${encodeURIComponent(orderId)}`)
+    nokosPendingOrders.delete(orderId)
+    return m.reply(`✅ *Permintaan pembatalan dikirim*\n\n🆔 Order: *${order?.id || orderId}*\n📌 Status: *${order?.status || 'diproses'}*`)
+  } catch (e) { return m.reply(`❌ *Order tidak bisa dibatalkan*\n\n${nokosErrorMessage(e)}`) }
+}
+break
 
 default:
 let xtx = m.text.slice(0)
