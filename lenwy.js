@@ -208,6 +208,9 @@ const antidel = JSON.parse(fs.readFileSync("./lib/antidel.json"))
 const banned = JSON.parse(fs.readFileSync('./data/db/banned.json'))
 const imagenya = JSON.parse(fs.readFileSync('./database/Lenwytesti.json'))
 
+// AutoBlock: chat private ke bot akan diblokir jika ON.
+global.autoblock = global.autoblock ?? false
+
 // Database whitelist grup yang di-ACC owner
 const accGroupFilePath = path.join(__dirname, './database/accGroup.json')
 function loadAccGroups() {
@@ -409,7 +412,32 @@ const more = String.fromCharCode(8206)
 const readMore = more.repeat(4001)
 
 
-if (global.db.data?.settings?.autoblock && !isCreator && !m.isGroup) return lenwy.updateBlockStatus(m.sender, "block")
+if (global.autoblock && !isCreator && !m.isGroup) {
+  const botJid = lenwy.user?.id ? lenwy.user.id.split(':')[0] + '@s.whatsapp.net' : ''
+  if (m.sender !== botJid) {
+    try {
+      await m.reply(`⚠️ CHAT BOT = DENDA\n\nWOI KONT, INI NOMOR BOT ANJG ‼️\nGA BACA USN APA GIMANA?!\n\n🔒 AUTO BLOCK.`)
+    } catch {}
+    try {
+      const ownerNumbers = [...new Set([...(global.owner || []), ...(global.nomorOwn || [])])]
+        .map(v => String(v).replace(/[^0-9]/g, ''))
+        .filter(Boolean)
+      const report = `🚨 *AUTO BLOCK TERDETEKSI*\n\n👤 Nama : ${pushname}\n📱 Nomor : ${m.sender.split('@')[0]}\n💬 Pesan : ${body || '-'}\n\n🔒 Status : OTOMATIS DIBLOKIR`
+      for (const number of ownerNumbers) {
+        const ownerJid = number + '@s.whatsapp.net'
+        if (ownerJid !== botJid) await lenwy.sendMessage(ownerJid, { text: report })
+      }
+    } catch (e) {
+      console.error('Gagal kirim notif AutoBlock ke owner:', e)
+    }
+    try {
+      await lenwy.updateBlockStatus(m.sender, "block")
+    } catch (e) {
+      console.error('Gagal auto block:', e)
+    }
+    return
+  }
+}
 
 function msToDate(ms) {
   let d = isNaN(ms) ? '--' : Math.floor(ms / 86400000)
@@ -4282,8 +4310,9 @@ let anu = `
 │ 𝅄𑣿…  resetaudio (audio bawaan)
 │ 𝅄𑣿…  addowner (628xx) 
 │ 𝅄𑣿…  delowner (628xx) 
-│ 𝅄𑣿…  𝖼𝗀𝖼 ( 𝖼𝗋𝖾𝖺𝗍𝖾 𝗀𝗋𝗈𝗎𝗉 ) 
-╰ 𝅄𑣿…  𝗌𝗐𝗀𝖼 ( 𝗌𝗐 𝗀𝗋𝗈𝗎𝗉 ) 
+│ 𝅄𑣿…  𝖼𝗀𝖼 (𝖼𝗋𝖾𝖺𝗍𝖾 𝗀𝗋𝗈𝗎𝗉) 
+│ 𝅄𑣿…  autoblock (on/off) 
+╰ 𝅄𑣿…  𝗌𝗐𝗀𝖼 (𝗌𝗐 𝗀𝗋𝗈𝗎𝗉) 
 
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *𝖦𝗋𝗈𝗎𝗉 Menu*   ⁞⁞
 │ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝖼𝗁 (𝗈𝗇/𝗈𝖿𝖿) 
@@ -6562,15 +6591,14 @@ m.reply('sabar ya kak, lagi di check')
 
 case "autoblock": {
 if (!isCreator) return m.reply(mess.owner)
-if (!text) return m.reply("Contoh: .autoblock on/off")
-if (!global.db.data.settings.autoblock) global.db.data.settings.autoblock = false
-if (/on/.test(text)) {
-global.db.data.settings.autoblock = true
-return m.reply("Berhasil menyalakan autoblock ✅")
-} else if (/off/.test(text)) {
-global.db.data.settings.autoblock = false
-return m.reply("Berhasil mematikan autoblock ✅")
-} else return m.reply("Contoh: .autoblock on/off")
+const mode = String(text || '').trim().toLowerCase()
+if (!['on', 'off'].includes(mode)) {
+return m.reply(`⚙️ *AUTOBLOCK*\n\nStatus saat ini: *${global.autoblock ? 'ON 🟢' : 'OFF 🔴'}*\n\nGunakan:\n• *${prefix}autoblock on* — aktifkan\n• *${prefix}autoblock off* — matikan`)
+}
+global.autoblock = mode === 'on'
+return m.reply(global.autoblock
+? `╭━━━━━━━━━━━━━━━━━━╮\n┃ 🟢 AUTOBLOCK ON ┃\n╰━━━━━━━━━━━━━━━━━━╯\n\n⚠️ Yang chat langsung ke nomor bot akan otomatis diblokir.`
+: `╭━━━━━━━━━━━━━━━━━━╮\n┃ 🔴 AUTOBLOCK OFF ┃\n╰━━━━━━━━━━━━━━━━━━╯\n\n⚠️ Auto block chat pribadi dimatikan.`)
 }
 break
         
