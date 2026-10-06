@@ -272,7 +272,7 @@ let secreto = JSON.parse(fs.readFileSync('./database/secreto_balas.json'))
 const prefix = /^[°zZ#$@+,.?=''():√%!¢£¥€π¤ΠΦ&><™©®Δ^βα¦|/\\©^]/.test(body) 
     ? body.match(/^[°zZ#$@+,.?=''():√%!¢£¥€π¤ΠΦ&><™©®Δ^βα¦|/\\©^]/gi)[0] // Ambil prefix yang ditemukan
     : '';
-if (!body || !body.startsWith(prefix)) return;
+if (!body && m.mtype !== 'groupStatusMentionMessage' && !m.message?.groupStatusMentionMessage) return;
 
 const content = body.slice(prefix.length).trim()
 
@@ -1058,37 +1058,34 @@ if (db.data.chats[m.chat].antitoxic1) {
     }
   }
 }
-     
- /*if (db.data.chats[m.chat].antitagsw) {
 
-  const isTagsw = Tagsw.exec(m.text)
-  if (!m.key.fromMe && !isCreator && !isAdmins) {
-    if (isTagsw) {
-      await lenwy.groupParticipantsUpdate(m.chat, [m.sender], 'remove')
-    }
-  }
-}*/
-   if (db.data.chats[m.chat].antitagsw) {
-    if (m.mtype === "groupStatusMentionMessage") {
-        if (!(m.key.fromMe || isAdmins || isCreator)) {
-            m.reply(`*[ DETECK ]*\n${pushname} Terdeteksi Tag Status WhatsApp di grup, pesan akan dihapus`);
+ // Anti Tag Status WhatsApp (SW)
+ if (m.isGroup && db.data.chats[m.chat].antitagsw) {
+   const isStatusMention =
+     m.mtype === "groupStatusMentionMessage" ||
+     !!m.message?.groupStatusMentionMessage;
 
-            try {
-                await lenwy.sendMessage(m.chat, {
-                    delete: {
-                        remoteJid: m.chat,
-                        fromMe: true,
-                        id: m.key.id,
-                        participant: m.key.participant || m.participant || m.key.remoteJid
-                    }
-                });
-            } catch (e) {
-                console.error('Gagal menghapus pesan tag status:', e);
-            }
-        }
-    }
-} 
-     
+   if (isStatusMention && !m.key.fromMe && !isCreator && !isAdmins) {
+     try {
+       // Hapus pesan SW yang di-tag ke grup
+       await lenwy.sendMessage(m.chat, {
+         delete: {
+           remoteJid: m.chat,
+           id: m.key.id,
+           participant: m.key.participant || m.sender,
+         }
+       });
+
+       // Kirim notifikasi deteksi
+       await lenwy.sendMessage(m.chat, {
+         text: `*[ ANTI TAG SW ]*\n🚫 @${m.sender.split("@")[0]} terdeteksi men-tag Status WhatsApp ke grup.\n🗑️ Pesan otomatis dihapus.`,
+         mentions: [m.sender]
+       });
+     } catch (e) {
+       console.error("[ANTITAGSW] Gagal menghapus pesan:", e);
+     }
+   }
+ }
 
 if (db.data.chats[m.chat].antitoxic2) {
   const isToxic = toxicWords.exec(m.text)
@@ -3366,6 +3363,32 @@ function configBotMenu(prefix) {
 
 switch (command) {
 
+case "antitagsw": {
+    if (!m.isGroup) return m.reply("❌ Fitur ini hanya bisa digunakan di grup.");
+    if (!isAdmins && !isCreator) return m.reply("❌ Khusus admin grup.");
+
+    const arg = String(args[0] || "").toLowerCase();
+
+    if (!['on', 'off'].includes(arg)) {
+        return m.reply(
+            `╭─❏ *ANTI TAG SW*\n` +
+            `│ Status: *${db.data.chats[m.chat].antitagsw ? "ON 🟢" : "OFF 🔴"}*\n` +
+            `│\n` +
+            `│ *.antitagsw on* → Aktifkan\n` +
+            `│ *.antitagsw off* → Matikan\n` +
+            `╰────────────`
+        );
+    }
+
+    db.data.chats[m.chat].antitagsw = arg === 'on';
+
+    return m.reply(
+        arg === 'on'
+            ? "✅ *Anti Tag SW berhasil diaktifkan!*\nSekarang tag Status WhatsApp ke grup akan otomatis dihapus."
+            : "❌ *Anti Tag SW berhasil dimatikan!*\nTag Status WhatsApp tidak akan dihapus otomatis."
+    );
+}
+
 case 'ceklid': {
     const raw = String(text || '').trim();
     const nomor = raw.replace(/[^0-9]/g, '');
@@ -4346,6 +4369,7 @@ let anu = `
 │ 𝅄𑣿…  𝖾𝖽𝗂𝗍𝖽𝖾𝗄𝗌
 │ 𝅄𑣿…  𝗋𝖾𝗌𝖾𝗍𝗅𝗂𝗇𝗄𝗀𝖼
 │ 𝅄𑣿…  𝖾𝖽𝗂𝗍𝗌𝗎𝖻𝗃𝖾𝗄
+│ 𝅄𑣿…  antitagsw (on/off)
 │ 𝅄𑣿…  𝖻𝗈𝗍 (𝗆𝖾𝗆𝖺𝗇𝗀𝗀𝗂𝗅) 
 │ 𝅄𑣿…  𝖺𝖿𝗄
 │ 𝅄𑣿…  𝗌𝗅𝗋
@@ -4624,6 +4648,7 @@ m.reply(`
 │ 𝅄𑣿…  𝗃𝖾𝖽𝖺
 │ 𝅄𑣿…  𝖾𝖽𝗂𝗍𝖽𝖾𝗄𝗌
 │ 𝅄𑣿…  𝗋𝖾𝗌𝖾𝗍𝗅𝗂𝗇𝗄𝗀𝖼
+│ 𝅄𑣿…  antitagsw (on/off)
 │ 𝅄𑣿…  𝖾𝖽𝗂𝗍𝗌𝗎𝖻𝗃𝖾𝗄
 │ 𝅄𑣿…  𝖻𝗈𝗍 (𝗆𝖾𝗆𝖺𝗇𝗀𝗀𝗂𝗅) 
 │ 𝅄𑣿…  𝖺𝖿𝗄
