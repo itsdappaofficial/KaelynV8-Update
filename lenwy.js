@@ -4501,7 +4501,8 @@ let anu = `
 
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Alightmation Menu*   ⁞⁞
 │ 𝅄𑣿…  amsendlink
-╰ 𝅄𑣿…  amverifikasi
+│ 𝅄𑣿…  amverifikasi
+╰ 𝅄𑣿…  presetam
 
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Nokos Menu*   ⁞⁞
 │ 𝅄𑣿…  nokos 
@@ -4740,11 +4741,12 @@ m.reply(`
  }
  break
 
-case 'alighmationmenu': {
+case 'alightmationmenu': {
 m.reply(`
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Alightmation Menu*   ⁞⁞
 │ 𝅄𑣿…  amsendlink
-╰ 𝅄𑣿…  amverifikasi
+│ 𝅄𑣿…  amverifikasi
+╰ 𝅄𑣿…  presetam
  `)
  }
  break
