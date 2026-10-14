@@ -272,6 +272,40 @@ let secreto = JSON.parse(fs.readFileSync('./database/secreto_balas.json'))
 const prefix = /^[°zZ#$@+,.?=''():√%!¢£¥€π¤ΠΦ&><™©®Δ^βα¦|/\\©^]/.test(body) 
     ? body.match(/^[°zZ#$@+,.?=''():√%!¢£¥€π¤ΠΦ&><™©®Δ^βα¦|/\\©^]/gi)[0] // Ambil prefix yang ditemukan
     : '';
+// AntiFoto lebih awal: pesan gambar tanpa caption punya body kosong dan akan return di bawah.
+if (m?.isGroup && m.mtype === 'imageMessage' && global.db?.data?.chats?.[m.chat]?.antifoto && !m.key?.fromMe) {
+  (async () => {
+    try {
+      const metadata = await lenwy.groupMetadata(m.chat)
+      const participants = metadata?.participants || []
+      const cleanJid = value => String(value || '').split(':')[0]
+      const senderId = cleanJid(m.sender || m.key?.participant)
+      const botJid = cleanJid(await lenwy.decodeJid(lenwy.user.id))
+      const senderInfo = participants.find(p => cleanJid(p.id) === senderId || cleanJid(p.jid) === senderId || cleanJid(p.phoneNumber) === senderId)
+      const senderIsAdmin = Boolean(senderInfo?.admin || senderInfo?.isAdmin || senderInfo?.isSuperAdmin)
+      if (senderIsAdmin) return
+      // Ikuti format delete AntiTagSW; jangan mengandalkan isBotAdmins lokal,
+      // karena JID bot dapat berbeda format (PN/LID/device) dari metadata grup.
+      await lenwy.sendMessage(m.chat, {
+        delete: {
+          remoteJid: m.chat,
+          id: m.key.id,
+          participant: m.key.participant || m.sender,
+        }
+      })
+      // Notifikasi hanya dikirim setelah permintaan penghapusan berhasil.
+      const senderNumber = String(m.sender || m.key?.participant || '').split('@')[0].split(':')[0]
+      await lenwy.sendMessage(m.chat, {
+        text: `📸 Waduh, ketahuan nih @${senderNumber} 😂\n\n🚫 Di grup ini nggak boleh kirim foto!\n🗑️ Bot udah hapus fotonya.\n🤭 Jangan diulang yaa.`,
+        mentions: [m.sender || m.key?.participant].filter(Boolean)
+      })
+      console.log('[ANTIFOTO] Foto anggota berhasil dihapus:', m.key?.id)
+    } catch (e) {
+      console.error('[ANTIFOTO] Gagal menghapus foto:', e?.stack || e)
+    }
+  })()
+}
+
 if (!body && m.mtype !== 'groupStatusMentionMessage' && !m.message?.groupStatusMentionMessage) return;
 
 const content = body.slice(prefix.length).trim()
@@ -412,7 +446,12 @@ const more = String.fromCharCode(8206)
 const readMore = more.repeat(4001)
 
 
-if (global.autoblock && !isCreator && !m.isGroup) {
+// Jangan proses pesan channel/newsletter dengan fitur Auto Block.
+const isNewsletter = [m.chat, m.key?.remoteJid, from].some(
+  jid => typeof jid === 'string' && jid.endsWith('@newsletter')
+)
+
+if (global.autoblock && !isCreator && !m.isGroup && !isNewsletter) {
   const botJid = lenwy.user?.id ? lenwy.user.id.split(':')[0] + '@s.whatsapp.net' : ''
   if (m.sender !== botJid) {
     try {
@@ -731,6 +770,7 @@ try {
         if (!('antilinktt' in chats)) chats.antilinktt = false;
         if (!('antivirtex' in chats)) chats.antivirtex = true;
         if (!('antipanel' in chats)) chats.antipanel = false;
+        if (!('antifoto' in chats)) chats.antifoto = false;
         if (!('antilinkgc' in chats)) chats.antilinkgc = true;
         if (!('antilinkgc2' in chats)) chats.antilinkgc2 = true;
         if (!('antiwame' in chats)) chats.antiwame = false;
@@ -759,6 +799,7 @@ chats.autoshalat = true;
         antilinktt: true,
         antivirtex: true,
         antipanel: false,
+        antifoto: false,
         antiwame: false,
         antilinkgc: false,
         antilinkgc2: false,
@@ -4239,6 +4280,7 @@ let anu = `
 │ 𝅄𑣿…  𝖣𝗈𝗐𝗇𝗅𝗈𝖺𝖽𝗆𝖾𝗇𝗎
 │ 𝅄𑣿…  Apikeydappamenu
 │ 𝅄𑣿…  Antirippermenu
+│ 𝅄𑣿…  Alightmationmenu
 │ 𝅄𑣿…  Nokosmenu 
 ╰ 𝅄𑣿…  Randommenu
 
@@ -4343,7 +4385,7 @@ let anu = `
 │ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝗅𝗂𝗇𝗄 (𝗈𝗇/𝗈𝖿𝖿) 
 │ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝗉𝗅 (𝗈𝗇/𝗈𝖿𝖿) 
 │ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝗍𝗈𝗑𝗂𝖼𝟣 (𝗈𝗇/𝗈𝖿𝖿) 
-│ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝗍𝗈𝗑𝗂𝖼𝟤 (𝗈𝗇/𝗈𝖿𝖿) 
+│ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝗍𝗈𝗑𝗂𝖼𝟤 (𝗈𝗇/𝗈f𝖿) 
 │ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝗅𝗂𝗇𝗄𝗍𝗍 (𝗈𝗇/𝗈𝖿𝖿) 
 │ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝗅𝗂𝗇𝗄𝗒𝗍 (𝗈𝗇/𝗈𝖿𝖿) 
 │ 𝅄𑣿…  𝖺𝗇𝗍𝗂𝗅𝗂𝗇𝗄𝗀𝖼𝟣 (𝗈𝗇/𝗈𝖿𝖿) 
@@ -4361,7 +4403,7 @@ let anu = `
 │ 𝅄𑣿…  𝗌𝖾𝗇𝖽𝗅𝗂𝗇𝗄𝗀𝖼 (𝟨𝟤𝟪𝟧𝗑𝗑) 
 │ 𝅄𑣿…  𝗂𝗇𝗌𝗉𝖾𝖼𝗍 (𝗅𝗂𝗇𝗄𝗇𝗒𝖺) 
 │ 𝅄𑣿…  𝗀𝖼𝗌𝖾𝗍 (𝗌𝖾𝗍 waktu 𝗈𝗉𝖾𝗇/𝖼𝗅𝗈𝗌𝖾) 
-│ 𝅄𑣿…  gcsetoff ( off in op/clo) 
+│ 𝅄𑣿…  gcsetoff (on/off) 
 │ 𝅄𑣿…  gcsetinfo
 │ 𝅄𑣿…  𝗅𝗂𝗇𝗄𝗀𝖼
 │ 𝅄𑣿…  𝗌𝖾𝗍𝗉𝗉𝗀𝖼 
@@ -4370,6 +4412,7 @@ let anu = `
 │ 𝅄𑣿…  𝗋𝖾𝗌𝖾𝗍𝗅𝗂𝗇𝗄𝗀𝖼
 │ 𝅄𑣿…  𝖾𝖽𝗂𝗍𝗌𝗎𝖻𝗃𝖾𝗄
 │ 𝅄𑣿…  antitagsw (on/off)
+│ 𝅄𑣿…  𝖺ntifoto (𝗈𝗇/𝗈𝖿𝖿) 
 │ 𝅄𑣿…  𝖻𝗈𝗍 (𝗆𝖾𝗆𝖺𝗇𝗀𝗀𝗂𝗅) 
 │ 𝅄𑣿…  𝖺𝖿𝗄
 │ 𝅄𑣿…  𝗌𝗅𝗋
@@ -4455,6 +4498,10 @@ let anu = `
 │ 𝅄𑣿…  delripper (628xx) 
 │ 𝅄𑣿…  listripper
 ╰ 𝅄𑣿…  ceklid
+
+╭┈ ⁞⁞  ࣪࣪  ֵ  *Alightmation Menu*   ⁞⁞
+│ 𝅄𑣿…  amsendlink
+╰ 𝅄𑣿…  amverifikasi
 
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Nokos Menu*   ⁞⁞
 │ 𝅄𑣿…  nokos 
@@ -4649,6 +4696,7 @@ m.reply(`
 │ 𝅄𑣿…  𝖾𝖽𝗂𝗍𝖽𝖾𝗄𝗌
 │ 𝅄𑣿…  𝗋𝖾𝗌𝖾𝗍𝗅𝗂𝗇𝗄𝗀𝖼
 │ 𝅄𑣿…  antitagsw (on/off)
+│ 𝅄𑣿…  𝖺ntifoto (𝗈𝗇/𝗈𝖿𝖿) 
 │ 𝅄𑣿…  𝖾𝖽𝗂𝗍𝗌𝗎𝖻𝗃𝖾𝗄
 │ 𝅄𑣿…  𝖻𝗈𝗍 (𝗆𝖾𝗆𝖺𝗇𝗀𝗀𝗂𝗅) 
 │ 𝅄𑣿…  𝖺𝖿𝗄
@@ -4692,6 +4740,14 @@ m.reply(`
  }
  break
 
+case 'alighmationmenu': {
+m.reply(`
+╭┈ ⁞⁞  ࣪࣪  ֵ  *Alightmation Menu*   ⁞⁞
+│ 𝅄𑣿…  amsendlink
+╰ 𝅄𑣿…  amverifikasi
+ `)
+ }
+ break
 
 // STALK MENU
 case 'stalkmenu': {
@@ -5032,119 +5088,60 @@ case 'song': {
  try {
  await lenwy.sendMessage(m.chat, { react: { text: '🔍', key: m.key } });
 
- const axios = require('axios');
- const yts = require('yt-search');
- const apiKey = '99261jap81937jdo820hao'
- let videoUrl = text;
- let videoData = null;
+ // .play sekarang memakai scraper lokal, tanpa API key.
+ const { ytPlayMp3, ytDonlodMp3 } = require('./scrape/yt');
+ let result;
 
- if (!/youtu\.?be/.test(text)) {
-
- const search = await yts(text);
-
- if (!search.videos || search.videos.length === 0) {
- return m.reply('❌ Lagu tidak ditemukan.');
- }
-
- const validVideo = search.videos.find(v =>
- v.seconds > 0 &&
- !v.isLive &&
- !v.url.includes('/shorts/')
- );
-
- if (!validVideo) {
- return m.reply('❌ Tidak menemukan video yang valid.');
- }
-
- videoUrl = validVideo.url;
- videoData = validVideo;
-
+ if (/youtu\\.?be/i.test(text)) {
+     result = await ytDonlodMp3(text);
  } else {
+     result = await ytPlayMp3(text);
+ }
 
- const videoIdMatch = videoUrl.match(/(?:v=|youtu\.be\/)([^&]+)/);
- const videoId = videoIdMatch ? videoIdMatch[1] : null;
-
- videoData = {
- title: "YouTube Audio",
- author: { name: "YouTube" },
- timestamp: "Unknown",
- views: "Unknown",
- thumbnail: videoId
- ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
- : null
- };
+ if (!result || !result.url) {
+     throw new Error('Audio URL tidak ditemukan');
  }
 
  await lenwy.sendMessage(m.chat, { react: { text: '⬇️', key: m.key } });
 
- const downloadUrl = `https://api.autoresbot.com/api/downloader/ytplay?apikey=${apiKey}&url=${encodeURIComponent(videoUrl)}`;
-
- let audioUrl = null;
- let attempts = 0;
- const maxAttempts = 10;
-
- while (attempts < maxAttempts) {
-
- const { data } = await axios.get(downloadUrl);
-
- if (data.status && data.data && data.data.url) {
- audioUrl = data.data.url;
- break;
- }
-
- if (data.status && data.message?.toLowerCase().includes("proses")) {
- await new Promise(resolve => setTimeout(resolve, 3000));
- attempts++;
- } else {
- break;
- }
- }
-
- if (!audioUrl) {
- return m.reply("❌ Audio masih diproses atau gagal. Coba lagi sebentar.");
- }
-
  let thumbBuffer = null;
+ if (result.thumb) {
+     try {
+         const thumbRes = await axios.get(result.thumb, { responseType: 'arraybuffer' });
+         thumbBuffer = Buffer.from(thumbRes.data);
+     } catch (e) {
+         console.log('Thumbnail gagal diambil');
+     }
+ }
 
- if (videoData.thumbnail) {
- try {
- const thumbRes = await axios.get(videoData.thumbnail, { responseType: 'arraybuffer' });
- thumbBuffer = Buffer.from(thumbRes.data);
- } catch (e) {
- console.log("Thumbnail gagal diambil");
- }
- }
+ const title = result.title || 'YouTube Audio';
+ const channel = result.channel || 'Unknown';
+ const views = result.views || 'Unknown';
+ const published = result.published || 'Unknown';
 
  if (thumbBuffer) {
- await lenwy.sendMessage(m.chat, {
- image: thumbBuffer,
- caption:
-`🎵 *YouTube Play*
-
-📌 Judul: ${videoData.title}
-👤 Channel: ${videoData.author?.name || "Unknown"}
-⏱️ Durasi: ${videoData.timestamp || "Unknown"}
-📊 Views: ${videoData.views || "Unknown"}
-
-⏳ Sedang mengunduh audio...`
- }, { quoted: m });
+     await lenwy.sendMessage(m.chat, {
+         image: thumbBuffer,
+         caption:
+`🎵 *YouTube Play*\n\n📌 Judul: ${title}\n👤 Channel: ${channel}\n📊 Views: ${views}\n📅 Published: ${published}\n\n⏳ Sedang mengunduh audio...`
+     }, { quoted: m });
  }
 
+ const safeTitle = title.replace(/[\\/:*?"<>|]/g, '').slice(0, 100) || 'audio';
  await lenwy.sendMessage(m.chat, {
- audio: { url: audioUrl },
- mimetype: 'audio/mpeg',
- ptt: false,
- fileName: `${videoData.title}.mp3`
+     audio: { url: result.url },
+     mimetype: 'audio/mpeg',
+     ptt: false,
+     fileName: `${safeTitle}.mp3`
  }, { quoted: m });
 
  await m.reply("SORRY BRE KALO MB LAGUNYA GEDE, BIAR JERNIH SOALNYA");
-
  await lenwy.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
 
  } catch (err) {
- console.error('YTPlay Fatal Error:', err.response?.data || err);
+ console.error('YTPlay Scraper Error:', err?.message || err);
  await lenwy.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
- m.reply('❌ Terjadi kesalahan sistem. Coba lagi nanti.');
+ m.reply('❌ Gagal mengambil audio dari YouTube. Coba judul/link lain.');
  }
 }
 break
@@ -6285,6 +6282,271 @@ case 'jadihitam': {
     } catch (err) {
         console.error('ERROR JADI HITAM:', err);
         return m.reply('Gagal memproses gambar kak 😭');
+    }
+}
+break;
+
+case 'presetam': {
+    if (!text) {
+        return m.reply(
+            `Masukkan link video TikTok!\n\n` +
+            `Contoh:\n${prefix + command} https://vt.tiktok.com/ZSbE5BwhA/`
+        )
+    }
+
+    try {
+        await m.reply('⏳ Sedang mencari preset Alight Motion...')
+
+        const { data } = await axios.get(
+            'https://bintangapi.my.id/api/amfind/',
+            {
+                params: {
+                    url: text.trim()
+                },
+                headers: {
+                    Accept: '*/*',
+                    'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+                    Connection: 'keep-alive',
+                    Origin: 'https://starlabs.biz.id',
+                    Referer: 'https://starlabs.biz.id/',
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36'
+                },
+                timeout: 60000
+            }
+        )
+
+        if (!data?.success || !data?.data) {
+            return m.reply(
+                '❌ Preset tidak ditemukan atau server gagal memproses video.'
+            )
+        }
+
+        const preset = data.data.preset
+        const video = data.data.video
+        const items = preset?.items || []
+
+        const link5MB = items.find(item =>
+            item.label?.toUpperCase() === '5MB'
+        )?.url
+
+        const linkXML = items.find(item =>
+            item.label?.toUpperCase() === 'XML'
+        )?.url
+
+        let tanggal = 'Tidak tersedia'
+
+        if (video?.created_at) {
+            const date = new Date(video.created_at)
+
+            if (!Number.isNaN(date.getTime())) {
+                tanggal = date.toLocaleString('id-ID', {
+                    timeZone: 'Asia/Jakarta',
+                    day: '2-digit',
+                    month: 'long',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                }) + ' WIB'
+            }
+        }
+
+        const result =
+            `*ALIGHT MOTION PRESET*\n\n` +
+            `Your preset is ready to download.\n\n` +
+            `┌  VIDEO INFORMATION\n` +
+            `│  Upload Date : ${tanggal}\n` +
+            `└──────────────\n\n` +
+            `┌  DOWNLOAD PRESET\n` +
+            `│\n` +
+            `│  ▸ *PRESET 5MB*\n` +
+            `│  ${link5MB || 'Link tidak tersedia'}\n` +
+            `│\n` +
+            `│  ▸ *PRESET XML*\n` +
+            `│  ${linkXML || 'Link tidak tersedia'}\n` +
+            `└──────────────\n\n` +
+            `_Enjoy your next edit._`
+
+        await lenwy.sendMessage(
+            m.chat,
+            { text: result },
+            { quoted: m }
+        )
+
+    } catch (e) {
+        console.error('PresetAM Error:', e.response?.data || e)
+
+        return m.reply(
+            `❌ *GAGAL MENCARI PRESET*\n\n` +
+            `Pesan: ${
+                e.code === 'ECONNABORTED'
+                    ? 'Request API timeout.'
+                    : e.message
+            }`
+        )
+    }
+}
+break
+
+case 'amsendlink': {
+    if (!text) {
+        return lenwy.sendMessage(m.chat, {
+            text: `*ALIGHT MOTION — SEND LINK*
+
+📌 *Cara penggunaan:*
+.amsendlink email@gmail.com
+
+✉️ Masukkan email Alight Motion kamu untuk menerima link verifikasi.`
+        }, { quoted: m });
+    }
+
+    const email = text.trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return lenwy.sendMessage(m.chat, {
+            text: '❌ Format email tidak valid!\n\nContoh: .amsendlink email@gmail.com'
+        }, { quoted: m });
+    }
+
+    try {
+        const url = `https://dappaofficial-restapi.my.id/alight-motion/send-link?apikey=${global.API_key}&email=${encodeURIComponent(email)}`;
+
+        const response = await fetch(url);
+        const result = await response.json();
+
+        if (result.status) {
+            return lenwy.sendMessage(m.chat, {
+                text: `*ALIGHT MOTION — SEND LINK*
+
+╭━━━「 ✅ SUCCESS 」━━━╮
+┃
+┃  ✉️ Email : ${result.data.mail}
+┃  📌 Status : BERHASIL
+┃  ⚙️ Action : ${result.data.action}
+┃
+╰━━━━━━━━━━━━━━━━━━╯
+
+🎉 *LINK VERIFIKASI TERKIRIM!*
+
+Link verifikasi sudah dikirim ke email
+kakak. Silakan cek kotak masuk email ya. 📩
+
+📌 *Langkah selanjutnya:*
+> Buka email yang didaftarkan.
+> Cari email verifikasi Alight Motion.
+> Salin link verifikasi yang diterima.
+> Ketik *.amverifikasi* untuk melanjutkan.
+
+✨ Setelah mendapatkan link verifikasi,
+silakan ketik *.amverifikasi* untuk melanjutkan. 💫
+
+━━━━━━━━━━━━━━━━━━
+💬 Pesan: ${result.data.message}
+⚡ Powered by ${result.creator}
+━━━━━━━━━━━━━━━━━━`
+            }, { quoted: m });
+        } else {
+            return lenwy.sendMessage(m.chat, {
+                text: `❌ *SEND LINK GAGAL*
+
+Email: ${email}
+Pesan: ${result.data?.message || result.message || 'Terjadi kesalahan dari API.'}
+
+Silakan coba lagi nanti.`
+            }, { quoted: m });
+        }
+    } catch (error) {
+        console.error('Error AM Send Link:', error);
+
+        return lenwy.sendMessage(m.chat, {
+            text: '❌ Terjadi kesalahan saat menghubungi API. Silakan coba lagi nanti.'
+        }, { quoted: m });
+    }
+}
+break;
+
+case 'amverifikasi': {
+    if (!text) {
+        return lenwy.sendMessage(m.chat, {
+            text: `*ALIGHT MOTION VERIFICATION*
+
+Cara penggunaan:
+.amverifikasi email@gmail.com|link_verifikasi`
+        }, { quoted: m });
+    }
+
+    const args = text.split('|');
+    const email = args[0]?.trim();
+    const link = args.slice(1).join('|').trim();
+
+    if (!email || !link) {
+        return lenwy.sendMessage(m.chat, {
+            text: '❌ Format salah!\n\nGunakan:\n.amverifikasi email@gmail.com|link_verifikasi'
+        }, { quoted: m });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return lenwy.sendMessage(m.chat, {
+            text: '❌ Format email tidak valid!'
+        }, { quoted: m });
+    }
+
+    if (!/^https?:\/\//i.test(link)) {
+        return lenwy.sendMessage(m.chat, {
+            text: '❌ Link verifikasi tidak valid!'
+        }, { quoted: m });
+    }
+
+    try {
+        const url = `https://dappaofficial-restapi.my.id/alight-motion/verif?apikey=${global.API_key}&email=${encodeURIComponent(email)}&link=${encodeURIComponent(link)}`;
+
+        const response = await fetch(url);
+        const result = await response.json();
+
+        if (result.status) {
+            return lenwy.sendMessage(m.chat, {
+                text: ` *ALIGHT MOTION — VERIFICATION* 
+
+╭━━━「 ✅ SUCCESS 」━━━╮
+┃
+┃  ✉️ Email : ${result.data.email}
+┃  📌 Status : VERIFIED
+┃  ⏳ Durasi : ${result.data.duration}
+┃  ⚙️ Action : ${result.data.action}
+┃
+╰━━━━━━━━━━━━━━━━━━╯
+
+🎉 *VERIFIKASI BERHASIL!*
+
+Silahkan login AM-nya ya kak, akun
+kakak sudah berhasil diverifikasi. ✅
+
+📌 *Langkah selanjutnya:*
+> Silahkan buka aplikasi Alight Motion.
+> Login menggunakan email yang tadi.
+> Ikuti petunjuk login jika diminta.
+
+✨ Terima kasih sudah menggunakan layanan kami, kak.
+Semoga membantu dan selamat berkreasi! 💫
+
+━━━━━━━━━━━━━━━━━━
+💬 Pesan: ${result.data.message}
+⚡ Powered by ${result.creator}
+━━━━━━━━━━━━━━━━━━`
+            }, { quoted: m });
+        } else {
+            return lenwy.sendMessage(m.chat, {
+                text: `❌ *VERIFIKASI GAGAL*
+
+Pesan: ${result.data?.message || result.message || 'Terjadi kesalahan dari API.'}`
+            }, { quoted: m });
+        }
+    } catch (error) {
+        console.error('Error AM Verifikasi:', error);
+
+        return lenwy.sendMessage(m.chat, {
+            text: '❌ Terjadi kesalahan saat menghubungi API. Silakan coba lagi nanti.'
+        }, { quoted: m });
     }
 }
 break;
@@ -11828,6 +12090,22 @@ case 'antiwame':
         m.reply(`*Ketik ${prefix + command} on/off*`)
     }
     break
+
+case 'antifoto': {
+    if (!m.isGroup) return m.reply(mess.group)
+    if (!isAdmins && !isCreator) return m.reply(mess.admin)
+    if (!isBotAdmins) return m.reply(mess.botAdmin)
+    const arg = String(args[0] || '').toLowerCase()
+    if (arg === 'on') {
+        db.data.chats[m.chat].antifoto = true
+        return m.reply('✅ *AntiFoto berhasil diaktifkan!*\nFoto dari anggota non-admin akan otomatis dihapus.')
+    } else if (arg === 'off') {
+        db.data.chats[m.chat].antifoto = false
+        return m.reply('✅ *AntiFoto berhasil dinonaktifkan!*')
+    }
+    return m.reply(`Ketik *${prefix}antifoto on* atau *${prefix}antifoto off*`)
+}
+break
 
 case 'antilink':
     if (!m.isGroup) return m.reply(mess.group)
