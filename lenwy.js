@@ -4502,6 +4502,7 @@ let anu = `
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Alightmation Menu*   ⁞⁞
 │ 𝅄𑣿…  amsendlink
 │ 𝅄𑣿…  amverifikasi
+│ 𝅄𑣿…  addampremium (buat akses)
 ╰ 𝅄𑣿…  presetam
 
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Nokos Menu*   ⁞⁞
@@ -4746,6 +4747,7 @@ m.reply(`
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Alightmation Menu*   ⁞⁞
 │ 𝅄𑣿…  amsendlink
 │ 𝅄𑣿…  amverifikasi
+│ 𝅄𑣿…  addampremium (buat akses)
 ╰ 𝅄𑣿…  presetam
  `)
  }
@@ -6390,7 +6392,53 @@ case 'presetam': {
 }
 break
 
+case 'addampremium': {
+    if (!isCreator) {
+        return m.reply('⛔ Perintah ini khusus admin/owner bot.');
+    }
+    const number = String(text || '').replace(/[^0-9]/g, '');
+    if (!number || number.length < 8 || number.length > 15) {
+        return m.reply('Format nomor tidak valid.\nContoh: .addampremium 6281234567890');
+    }
+    const amPremiumPath = path.join(__dirname, './database/alightmotionpremium.json');
+    let amPremiumNumbers = [];
+    try {
+        amPremiumNumbers = JSON.parse(fs.readFileSync(amPremiumPath, 'utf8'));
+        if (!Array.isArray(amPremiumNumbers)) amPremiumNumbers = [];
+    } catch {
+        amPremiumNumbers = [];
+    }
+    if (amPremiumNumbers.some(n => String(n).replace(/[^0-9]/g, '') === number)) {
+        return m.reply(`✅ Nomor ${number} sudah terdaftar sebagai AM Premium.`);
+    }
+    amPremiumNumbers.push(number);
+    fs.writeFileSync(amPremiumPath, JSON.stringify(amPremiumNumbers, null, 2));
+    return m.reply(`✅ Nomor ${number} berhasil di-ACC untuk fitur AM Premium.\nSekarang nomor tersebut bisa menggunakan amsendlink dan amverifikasi.`);
+}
+break;
+
+
 case 'amsendlink': {
+    // Akses AM hanya untuk nomor yang sudah di-ACC owner.
+    const amPremiumPath = path.join(__dirname, './database/alightmotionpremium.json');
+    let amPremiumNumbers = [];
+    try {
+        amPremiumNumbers = JSON.parse(fs.readFileSync(amPremiumPath, 'utf8'));
+        if (!Array.isArray(amPremiumNumbers)) amPremiumNumbers = [];
+    } catch {
+        amPremiumNumbers = [];
+    }
+    const amSenderNumber = String(m.sender || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    const hasAmPremium = amPremiumNumbers.some(number =>
+        String(number).replace(/[^0-9]/g, '') === amSenderNumber
+    );
+    if (!isCreator && !hasAmPremium) {
+        return lenwy.sendMessage(m.chat, {
+            text: 'Waduh, belum bisa nih! 😅\n\nNomor kamu belum di-ACC untuk menggunakan fitur AM Premium.\n\nMinta izin ke admin dulu, ya. Kalau sudah disetujui, baru fiturnya bisa dipakai. 🔐\n\n© Store Fintech Kaelyn'
+        }, { quoted: m });
+    }
+
+
     if (!text) {
         return lenwy.sendMessage(m.chat, {
             text: `*ALIGHT MOTION — SEND LINK*
@@ -6468,6 +6516,26 @@ Silakan coba lagi nanti.`
 break;
 
 case 'amverifikasi': {
+    // Akses AM hanya untuk nomor yang sudah di-ACC owner.
+    const amPremiumPath = path.join(__dirname, './database/alightmotionpremium.json');
+    let amPremiumNumbers = [];
+    try {
+        amPremiumNumbers = JSON.parse(fs.readFileSync(amPremiumPath, 'utf8'));
+        if (!Array.isArray(amPremiumNumbers)) amPremiumNumbers = [];
+    } catch {
+        amPremiumNumbers = [];
+    }
+    const amSenderNumber = String(m.sender || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    const hasAmPremium = amPremiumNumbers.some(number =>
+        String(number).replace(/[^0-9]/g, '') === amSenderNumber
+    );
+    if (!isCreator && !hasAmPremium) {
+        return lenwy.sendMessage(m.chat, {
+            text: 'Waduh, belum bisa nih! 😅\n\nNomor kamu belum di-ACC untuk menggunakan fitur AM Premium.\n\nMinta izin ke admin dulu, ya. Kalau sudah disetujui, baru fiturnya bisa dipakai. 🔐\n\n© Store Fintech Kaelyn'
+        }, { quoted: m });
+    }
+
+
     if (!text) {
         return lenwy.sendMessage(m.chat, {
             text: `*ALIGHT MOTION VERIFICATION*
