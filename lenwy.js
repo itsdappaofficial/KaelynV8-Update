@@ -4502,6 +4502,7 @@ let anu = `
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Alightmation Menu*   ⁞⁞
 │ 𝅄𑣿…  amsendlink
 │ 𝅄𑣿…  amverifikasi
+│ 𝅄𑣿…  ambulk
 │ 𝅄𑣿…  addampremium (buat akses)
 ╰ 𝅄𑣿…  presetam
 
@@ -4747,6 +4748,7 @@ m.reply(`
 ╭┈ ⁞⁞  ࣪࣪  ֵ  *Alightmation Menu*   ⁞⁞
 │ 𝅄𑣿…  amsendlink
 │ 𝅄𑣿…  amverifikasi
+│ 𝅄𑣿…  ambulk
 │ 𝅄𑣿…  addampremium (buat akses)
 ╰ 𝅄𑣿…  presetam
  `)
@@ -6416,6 +6418,180 @@ case 'addampremium': {
     return m.reply(`✅ Nomor ${number} berhasil di-ACC untuk fitur AM Premium.\nSekarang nomor tersebut bisa menggunakan amsendlink dan amverifikasi.`);
 }
 break;
+
+
+
+case 'ambulk': {
+    // CEK AKSES AM PREMIUM
+    const amPremiumPath = path.join(
+        __dirname,
+        './database/alightmotionpremium.json'
+    );
+
+    let amPremiumNumbers = [];
+
+    try {
+        amPremiumNumbers = JSON.parse(
+            fs.readFileSync(amPremiumPath, 'utf8')
+        );
+
+        if (!Array.isArray(amPremiumNumbers)) {
+            amPremiumNumbers = [];
+        }
+    } catch {
+        amPremiumNumbers = [];
+    }
+
+    const amSenderNumber = String(m.sender || '')
+        .split('@')[0]
+        .split(':')[0]
+        .replace(/[^0-9]/g, '');
+
+    const hasAmPremium = amPremiumNumbers.some(number =>
+        String(number).replace(/[^0-9]/g, '') === amSenderNumber
+    );
+
+    if (!isCreator && !hasAmPremium) {
+        return m.reply(
+            `🔒 *AKSES AM PREMIUM DITOLAK*\n\n` +
+            `Nomor kamu belum mendapatkan akses AM Premium.\n\n` +
+            `Silakan hubungi admin Dappa Official untuk meminta akses.\n\n` +
+            `⚡ Powered by Dappa Official`
+        );
+    }
+
+    // PROSES AMBULK
+    try {
+        const axios = require('axios');
+        const jumlah = Number(args[0]);
+
+        if (!args[0]) {
+            return m.reply(
+                `*ALIGHT MOTION — BULK ACCOUNT*\n\n` +
+                `📦 Minimal: 1 akun\n` +
+                `📦 Maksimal: 1.000 akun\n\n` +
+                `📌 *Contoh penggunaan:*\n` +
+                `> .ambulk 10\n` +
+                `> .ambulk 100\n` +
+                `> .ambulk 1000\n\n` +
+                `📚 *TUTOR AM BULK:*\n` +
+                `https://whatsapp.com/channel/0029VbDcEqo17EmnVrGw061Z\n\n` +
+                `⚡ Powered by Dappa Official`
+            );
+        }
+
+        if (
+            !Number.isInteger(jumlah) ||
+            jumlah < 1 ||
+            jumlah > 1000
+        ) {
+            return m.reply(
+                `❌ *BATAS BULK AM*\n\n` +
+                `📦 Minimal: 1 akun\n` +
+                `📦 Maksimal: 1.000 akun\n\n` +
+                `Contoh: .ambulk 1000`
+            );
+        }
+
+        if (!global.API_key) {
+            return m.reply(
+                '❌ global.API_key belum diatur.'
+            );
+        }
+
+        await m.reply(
+            `⏳ *MEMPROSES BULK ALIGHT MOTION*\n\n` +
+            `📦 Jumlah permintaan: ${jumlah} akun\n` +
+            `Mohon tunggu hingga proses selesai.`
+        );
+
+        const url =
+            `https://dappaofficial-restapi.my.id/alight-motion/bulk` +
+            `?apikey=${encodeURIComponent(global.API_key)}` +
+            `&jumlah=${jumlah}`;
+
+        const response = await axios.get(url, {
+            timeout: 120000
+        });
+
+        const res = response.data;
+
+        if (!res || res.status !== true || !res.data) {
+            return m.reply(
+                `❌ *BULK GAGAL*\n\n` +
+                `${res?.message || 'API tidak mengembalikan hasil yang valid.'}`
+            );
+        }
+
+        const data = res.data;
+        const accounts = Array.isArray(data.account)
+            ? data.account
+            : [];
+
+        let teks = `*ALIGHT MOTION — BULK ACCOUNT*\n\n`;
+
+        teks += `╭━━━「 ${accounts.length ? '✅ SUCCESS' : '⚠️ INFO'} 」━━━╮\n`;
+        teks += `┃\n`;
+        teks += `┃ 📦 Total Request : ${data.total_reques ?? jumlah}\n`;
+        teks += `┃ ✅ Berhasil : ${data.success_count ?? accounts.length}\n`;
+        teks += `┃ ❌ Gagal : ${data.failed_count ?? 0}\n`;
+        teks += `┃ ⚙️ Action : bulk\n`;
+        teks += `┃\n`;
+        teks += `╰━━━━━━━━━━━━━━━━━━╯\n\n`;
+
+        teks += `🎉 *PROSES BULK SELESAI!*\n\n`;
+        teks += `Permintaan akun Alight Motion sudah diproses.\n\n`;
+
+        teks += `📌 *LANGKAH SELANJUTNYA:*\n`;
+        teks += `> 1. Salin email akun yang tersedia.\n`;
+        teks += `> 2. Buka link akses email di bawah jika tersedia.\n`;
+        teks += `> 3. Ikuti tutorial AM Bulk.\n\n`;
+
+        teks += `📚 *TUTOR AM BULK:*\n`;
+        teks += `https://whatsapp.com/channel/0029VbDcEqo17EmnVrGw061Z\n\n`;
+
+        teks += `📋 *DAFTAR AKUN:*\n\n`;
+
+        if (accounts.length) {
+            teks += accounts.map((akun, i) =>
+                `╭━━━「 AKUN ${i + 1} 」━━━╮\n` +
+                `┃ ✉️ Email : ${akun.email || '-'}\n` +
+                `┃ 📦 Paket : ${akun.package || '-'}\n` +
+                `┃ ⏳ Durasi : ${akun.duration || '-'}\n` +
+                `╰━━━━━━━━━━━━━━━━━━╯`
+            ).join('\n\n');
+        } else {
+            teks += `Tidak ada akun yang dikembalikan oleh API.\n`;
+        }
+
+        if (data.acces_email) {
+            teks += `\n\n🔗 *LINK AKSES EMAIL:*\n${data.acces_email}`;
+        }
+
+        teks += `\n\n━━━━━━━━━━━━━━━━━━`;
+        teks += `\n⚡ Powered by Dappa Official`;
+        teks += `\n━━━━━━━━━━━━━━━━━━`;
+
+        return m.reply(teks);
+
+    } catch (err) {
+        console.error(
+            'Error ambulk:',
+            err.response?.data || err.message
+        );
+
+        if (err.code === 'ECONNABORTED') {
+            return m.reply(
+                '⏱️ Request timeout. Silakan coba lagi nanti.'
+            );
+        }
+
+        return m.reply(
+            `❌ *TERJADI KESALAHAN*\n\n` +
+            `Pesan: ${err.response?.data?.message || err.message}`
+        );
+    }
+}
 
 
 case 'amsendlink': {
